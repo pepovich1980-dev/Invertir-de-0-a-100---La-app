@@ -564,6 +564,7 @@ let S = {
   pRisk:null, pProj:10, iFilter:[], iShowClosed:false,
   profileStep:0, profileAnswers:{}, profileMode:false,
   iMes:CUR_MONTH, iYear:CUR_YEAR,
+  mGroup:'indices', mRefresh:0, htab:'radar',
 };
 
 function set(o){S={...S,...(typeof o==='function'?o(S):o)};render();}
@@ -574,7 +575,7 @@ function render(){
   try {
     let tabContent;
     try {
-      tabContent = S.tab===0?tabP():S.tab===1?tabI():S.tab===2?tabPat():tabRadar();
+      tabContent = S.tab===0?tabP():S.tab===1?tabI():S.tab===2?tabPat():S.tab===3?tabMercados():tabHerramientas();
     } catch(tabErr) {
       console.error('Tab render error:', tabErr);
       tabContent = `<div class="card" style="margin:20px;padding:20px;border-color:var(--red)">
@@ -601,7 +602,8 @@ function render(){
     <div class="tab ${S.tab===0?'on':''}" onclick="set({tab:0})">📊 Presupuesto</div>
     <div class="tab ${S.tab===1?'on':''}" onclick="set({tab:1})">📈 Inversiones</div>
     <div class="tab ${S.tab===2?'on':''}" onclick="set({tab:2})">🏛️ Patrimonio</div>
-    <div class="tab ${S.tab===3?'on':''}" onclick="set({tab:3})">🎯 Oportunidades</div>
+    <div class="tab ${S.tab===3?'on':''}" onclick="set({tab:3})">📡 Mercados</div>
+    <div class="tab ${S.tab===4?'on':''}" onclick="set({tab:4})">🛠️ Herramientas</div>
   </div>
   <div class="content">${tabContent}</div>
   </div>`;
@@ -1022,6 +1024,12 @@ function tabP(){
     <div class="card"><div class="kv">Ingreso Real</div><div class="kn fg">${fE(md.ingR)}</div></div>
     <div class="card"><div class="kv">Gasto Presup.</div><div class="kn fy">${fE(gP)}</div></div>
     <div class="card"><div class="kv">Gasto Real</div><div class="kn" style="color:${gR>gP?'var(--red)':'var(--green)'}">${fE(gR)}</div></div>
+  </div>
+  <div class="g4" style="margin-bottom:13px">
+    <div class="card" style="border-left:3px solid var(--green)"><div class="kv">Ahorro Real</div><div class="kn" style="color:${aR>=0?'var(--green)':'var(--red)'}">${fE(aR)}</div></div>
+    <div class="card" style="border-left:3px solid var(--blue)"><div class="kv">Tasa de Ahorro</div><div class="kn" style="color:${md.ingR>0&&aR>=0?'var(--green)':'var(--red)'}">${md.ingR>0?Math.round(aR/md.ingR*100):0}<span style="font-size:12px">%</span></div></div>
+    <div class="card" style="border-left:3px solid var(--gold)"><div class="kv">Ahorro Acum. ${yr}</div><div class="kn" style="color:${acR>=0?'var(--green)':'var(--red)'}">${fE(acR)}</div></div>
+    <div class="card" style="border-left:3px solid var(--purple)"><div class="kv">Obj. Ahorro Pres.</div><div class="kn fb">${fE(acP)}</div></div>
   </div>
 
   <!-- Ahorro + inversión row -->
@@ -2446,15 +2454,30 @@ function cerrarPos(id){
 function cierrePreview(id){
   const inv=(S.user.inv||[]).find(i=>i.id===id);if(!inv)return;
   const precio=+document.getElementById('pc-precio')?.value||0;
+  const fecha=document.getElementById('pc-fecha')?.value||new Date().toISOString().slice(0,10);
   const proceeds=inv.qty*precio;
   const coste=inv.qty*(inv.pC||0);
   const gan=proceeds-coste;
   const pctGan=coste?((gan/coste)*100):0;
+  // TIR anualizada
+  const dias=inv.fecha?Math.max(1,Math.round((new Date(fecha)-new Date(inv.fecha))/86400000)):365;
+  const tir=coste>0?(Math.pow(1+(gan/coste),365/dias)-1)*100:0;
   const prev=document.getElementById('cierre-preview');
-  if(prev) prev.innerHTML=`<div style="display:flex;flex-wrap:wrap;gap:14px">
-    <div><span style="color:var(--text2)">Ingresos venta:</span> <b style="color:var(--green)">${fE(proceeds)}</b></div>
-    <div><span style="color:var(--text2)">Coste:</span> <b>${fE(coste)}</b></div>
-    <div><span style="color:var(--text2)">Ganancia:</span> <b style="color:${gan>=0?'var(--green)':'var(--red)'}">${gan>=0?'+':''}${fE(gan)} (${fP(pctGan)})</b></div>
+  if(prev) prev.innerHTML=`<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:4px">
+    <div style="background:var(--bg3);border-radius:8px;padding:8px 10px">
+      <div style="font-size:9px;color:var(--text2);margin-bottom:2px">INGRESOS VENTA</div>
+      <div style="font-size:14px;font-weight:700;color:var(--green)">${fE(proceeds)}</div>
+    </div>
+    <div style="background:var(--bg3);border-radius:8px;padding:8px 10px">
+      <div style="font-size:9px;color:var(--text2);margin-bottom:2px">GANANCIA TOTAL</div>
+      <div style="font-size:14px;font-weight:700;color:${gan>=0?'var(--green)':'var(--red)'}">${gan>=0?'+':''}${fE(gan)}</div>
+      <div style="font-size:10px;color:${gan>=0?'var(--green)':'var(--red)'}">${fP(pctGan)}</div>
+    </div>
+    <div style="background:var(--bg3);border-radius:8px;padding:8px 10px">
+      <div style="font-size:9px;color:var(--text2);margin-bottom:2px">TIR ANUALIZADA</div>
+      <div style="font-size:14px;font-weight:700;color:${tir>=0?'var(--green)':'var(--red)'}">${tir>=0?'+':''}${tir.toFixed(1)}%</div>
+      <div style="font-size:10px;color:var(--text2)">${dias}d · ${(dias/365).toFixed(1)} años</div>
+    </div>
   </div>`;
 }
 function setCierreDestino(d){
@@ -2481,7 +2504,7 @@ function saveCierre(id){
   if(!u2.cashFlow) u2.cashFlow=[];
   u2.cashFlow.push({
     id:Date.now(),tipo:'venta',ticker:inv.ticker,nombre:inv.nombre,
-    invId:id,proceeds,coste,ganancia,pctGanancia:coste?(ganancia/coste*100):0,
+    invId:id,proceeds,coste,ganancia,pctGanancia:coste?(ganancia/coste*100):0,dias:Math.max(1,Math.round((new Date(fecha)-new Date(inv.fecha||fecha))/86400000)),tir:coste>0?(Math.pow(1+(ganancia/coste),365/Math.max(1,Math.round((new Date(fecha)-new Date(inv.fecha||fecha))/86400000)))-1)*100:0,
     fecha,destino,origen:inv.origen
   });
   // Update saldo
@@ -3540,6 +3563,31 @@ function tabPat(){
     <div class="card"><div class="kv">Objetivo ${proj}a (${prof.retExp}%/año)</div><div class="kn fp">${fE(meta)}</div><div style="font-size:11px;color:var(--text2);margin-top:3px">Base: ${fE(patriBase)}</div></div>
   </div>
 
+  <!-- Donut distribución por tipo + top holdings -->
+  ${invAbiertas.length>0?`
+  <div class="g2" style="margin-bottom:13px">
+    <div class="card">
+      <div style="font-weight:700;font-size:13px;margin-bottom:11px">🥧 Distribución por Tipo</div>
+      ${(()=>{
+        const tipos=['ETF','Acción','Fondo','Bono','Plan Pensiones','Inmueble','Private Equity','Cripto','Otro'];
+        const typeColors=['#5b9bd5','#c03c3b','#d28a3f','#4caf7d','#a07fd4','#e8a84a','#14b8a6','#f59e0b','#64748b'];
+        const pd=tipos.map((t,i)=>({name:t,value:invAbiertas.filter(i2=>i2.tipo===t).reduce((s,i2)=>s+i2.qty*(i2.pA||0),0),color:typeColors[i]})).filter(d=>d.value>0);
+        return '<div style="display:flex;align-items:flex-start;flex-wrap:wrap;gap:14px">'          +'<div style="width:160px">'+svgPie(pd,160)+'</div>'          +'<div style="flex:1;min-width:120px">'          +pd.map(d=>'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;font-size:12px">'            +'<div style="display:flex;align-items:center;gap:6px"><div class="dot" style="background:'+d.color+'"></div>'+d.name+'</div>'            +'<div style="text-align:right"><div style="font-weight:600">'+fE(d.value)+'</div><div style="font-size:10px;color:var(--text2)">'+Math.round(d.value/totABruto*100)+'%</div></div>'            +'</div>').join('')          +'</div></div>';
+      })()}
+    </div>
+    <div class="card">
+      <div style="font-weight:700;font-size:13px;margin-bottom:11px">🏆 Top Holdings</div>
+      ${invAbiertas.sort((a,b)=>b.qty*(b.pA||0)-a.qty*(a.pA||0)).slice(0,6).map(inv=>{
+        const val=inv.qty*(inv.pA||0);
+        const cost=inv.qty*(inv.pC||0);
+        const gain=val-cost;
+        const pctGain=cost>0?(gain/cost*100):0;
+        const pct=totABruto>0?Math.round(val/totABruto*100):0;
+        return '<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid rgba(74,53,32,.3)">'          +'<div style="min-width:0;flex:1"><div style="font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+escH(inv.ticker||inv.nombre)+'</div>'          +'<div style="font-size:10px;color:var(--text2)">'+escH(inv.tipo)+' · '+pct+'% cartera</div></div>'          +'<div style="text-align:right;flex-shrink:0;margin-left:8px"><div style="font-size:12px;font-weight:700">'+fE(val)+'</div>'          +'<div style="font-size:10px;color:'+( pctGain>=0?'var(--green)':'var(--red)')+'">'+( pctGain>=0?'+':'')+pctGain.toFixed(1)+'%</div></div>'          +'</div>';
+      }).join('')}
+    </div>
+  </div>`:``}
+
   <!-- Projection chart -->
   <div class="card" style="margin-bottom:13px">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px;flex-wrap:wrap;gap:8px">
@@ -4209,252 +4257,563 @@ function changeProfile(profId){
 }
 
 
-// ─── MOMENTUM RADAR ────────────────────────────────────────────────────────────
-// Pestaña 🎯 Oportunidades — integrada en Invertir de 0 a 100
-// Usa las variables de color del tema: --accent, --gold, --green, --red, --text, --text2, --card, --border, --bg2, --bg3
-
-const RD_SECS=[
-  {id:"Quantum",  lbl:"Quantum",        ico:"⚛️",hype:true},
-  {id:"Photonics",lbl:"AI Photonics",   ico:"💡",hype:true},
-  {id:"AI",       lbl:"AI / Robots",    ico:"🤖",hype:true},
-  {id:"EV",       lbl:"EV / Auto",      ico:"🚗",hype:true},
-  {id:"Bitcoin",  lbl:"Bitcoin+AI",     ico:"₿", hype:true},
-  {id:"Renovables",lbl:"Renovables",    ico:"♻️",hype:false},
-  {id:"Infra",    lbl:"Infraestructura",ico:"🏗️",hype:false},
-  {id:"Banca",    lbl:"Banca",          ico:"🏦",hype:false},
-  {id:"Consumo",  lbl:"Consumo",        ico:"🛍️",hype:false},
-  {id:"InsurTech",lbl:"InsurTech",      ico:"📊",hype:false},
-];
-
-const RD_STOCKS=[
-  {t:"XNDU",n:"Xanadu Quantum Tech.", sec:"Quantum",  ico:"⚛️",ex:"NASDAQ",p:22.44,cap:359, d:51.3,w:35.0,m:11.1, q:null,  y:null,  bz:98,txt:"IPO 27 mar vía SPAC, flotante mínimo. +51% en 2 días. NVIDIA Ising + World Quantum Day.",tags:["IPO reciente","SPAC","World Q Day"],F:{ipo:1,sec:1,multi:1,social:1,vol:1,rb:0,cal:1,up:0}},
-  {t:"IONQ",n:"IonQ Inc.",             sec:"Quantum",  ico:"⚛️",ex:"NYSE",  p:36.59,cap:9800,d:20.1,w:18.3,m:-12.4,q:-45.2,y:55.6,  bz:94,txt:"Rally +20% por NVIDIA Ising. Contrato DARPA HARQ. Vol 68M vs media 22M.",tags:["quantum","NVIDIA","DARPA"],F:{ipo:0,sec:1,multi:1,social:1,vol:1,rb:1,cal:1,up:0}},
-  {t:"QBTS",n:"D-Wave Quantum",        sec:"Quantum",  ico:"⚛️",ex:"NYSE",  p:14.43,cap:3200,d:14.4,w:12.8,m:-8.6, q:-38.4,y:458.0, bz:91,txt:"Adquisición anunciada + bookings récord. Upside analistas +168.7%.",tags:["quantum","adquisición","upside 168%"],F:{ipo:0,sec:1,multi:1,social:1,vol:1,rb:1,cal:1,up:0}},
-  {t:"RGTI",n:"Rigetti Computing",     sec:"Quantum",  ico:"⚛️",ex:"NASDAQ",p:14.04,cap:1900,d:4.98,w:9.2, m:-15.3,q:-52.1,y:545.0, bz:89,txt:"+545% en 12 meses. Azure Quantum + Amazon Braket. Upside +135%.",tags:["quantum","Microsoft","Amazon"],F:{ipo:0,sec:1,multi:1,social:1,vol:1,rb:1,cal:1,up:0}},
-  {t:"QUBT",n:"Quantum Computing Inc.",sec:"Quantum",  ico:"⚛️",ex:"NASDAQ",p:7.82, cap:650, d:2.35,w:8.1, m:-11.4,q:-44.8,y:67.0,  bz:83,txt:"Menor cap del sector quantum. Mayor upside % si sector continúa.",tags:["quantum","menor cap"],F:{ipo:0,sec:1,multi:0,social:1,vol:0,rb:1,cal:1,up:0}},
-  {t:"POET",n:"POET Technologies",     sec:"Photonics",ico:"💡",ex:"NASDAQ",p:6.96, cap:920, d:5.9, w:8.4, m:22.4, q:-18.3,y:94.4,  bz:96,txt:"Earnings próximo lunes. Optical engines AI. Vol 23M vs media 12M.",tags:["AI photonics","earnings","vol x2"],F:{ipo:0,sec:1,multi:1,social:1,vol:1,rb:0,cal:1,up:0}},
-  {t:"LWLG",n:"Lightwave Logic",       sec:"Photonics",ico:"💡",ex:"NASDAQ",p:18.50,cap:1580,d:8.2, w:14.6,m:55.2, q:12.4, y:141.9, bz:82,txt:"Polímero electroóptico para AI datacenters. Cap +55% en 1 mes.",tags:["AI photonics","polímero EO"],F:{ipo:0,sec:1,multi:0,social:0,vol:1,rb:0,cal:0,up:0}},
-  {t:"SERV",n:"Serve Robotics",        sec:"AI",       ico:"🤖",ex:"NASDAQ",p:8.45, cap:420, d:5.42,w:11.3,m:28.6, q:-22.4,y:142.3, bz:87,txt:"Deal DoorDash esta semana. Robots reparto Uber Eats. Nvidia inversor.",tags:["robots","DoorDash","Nvidia"],F:{ipo:0,sec:1,multi:1,social:1,vol:1,rb:1,cal:0,up:0}},
-  {t:"IREN",n:"IREN Ltd.",             sec:"AI",       ico:"🤖",ex:"NASDAQ",p:9.58, cap:780, d:4.01,w:6.8, m:-18.2,q:-35.6,y:88.4,  bz:85,txt:"WSB 2026 Index pick. Bitcoin mining → AI cloud.",tags:["AI cloud","WSB 2026"],F:{ipo:0,sec:1,multi:0,social:1,vol:0,rb:1,cal:0,up:0}},
-  {t:"LCID",n:"Lucid Group",           sec:"EV",       ico:"🚗",ex:"NASDAQ",p:8.27, cap:2900,d:12.0,w:8.4, m:-18.6,q:-44.2,y:-68.0, bz:82,txt:"HOY +12%: CEO nuevo + deal Uber 35k robotaxis + $1.05B capital.",tags:["CEO nuevo","Uber deal","$1.05B"],F:{ipo:0,sec:1,multi:1,social:1,vol:1,rb:1,cal:1,up:1}},
-  {t:"RIVN",n:"Rivian Automotive",     sec:"EV",       ico:"🚗",ex:"NASDAQ",p:16.07,cap:19800,d:1.7,w:1.6, m:-8.2, q:-15.4,y:-18.0, bz:74,txt:"Q1 entregas +20% YoY. R2 launch $58k. Earnings 30 abril.",tags:["R2 launch","Uber deal","earnings 30abr"],F:{ipo:0,sec:1,multi:1,social:1,vol:0,rb:1,cal:1,up:1}},
-  {t:"CHPT",n:"ChargePoint Holdings",  sec:"EV",       ico:"🚗",ex:"NYSE",  p:6.30, cap:153, d:9.0, w:6.5, m:-18.4,q:-42.3,y:-64.0, bz:71,txt:"CEO insider buying 13 abril → +9%. Upside +101% ($9.67 target).",tags:["CEO insider","upside 101%","rebote"],F:{ipo:0,sec:1,multi:1,social:0,vol:1,rb:1,cal:1,up:1}},
-  {t:"CLSK",n:"CleanSpark Inc.",       sec:"Bitcoin",  ico:"₿", ex:"NASDAQ",p:9.58, cap:850, d:4.01,w:7.4, m:-14.8,q:-28.3,y:45.2,  bz:81,txt:"Expansión AI computing. Insider buying feb. Zacks análisis.",tags:["bitcoin","AI pivot","insider"],F:{ipo:0,sec:0,multi:0,social:0,vol:0,rb:1,cal:0,up:1}},
-  {t:"ARRY",n:"Array Technologies",   sec:"Renovables",ico:"♻️",ex:"NASDAQ",p:7.85, cap:1100,d:2.1, w:5.4, m:-22.8,q:-38.4,y:-45.2, bz:62,txt:"Solar tracking líder. Caída -45% YTD. Backlog récord.",tags:["solar","backlog record"],F:{ipo:0,sec:0,multi:0,social:0,vol:0,rb:1,cal:1,up:0}},
-  {t:"PLUG",n:"Plug Power",           sec:"Renovables",ico:"♻️",ex:"NASDAQ",p:2.84, cap:1650,d:1.8, w:3.2, m:-28.6,q:-48.2,y:-72.0, bz:58,txt:"Hidrógeno verde. DOE loan $1.66B. Caída -72% = rebote extremo.",tags:["hidrógeno","DOE loan"],F:{ipo:0,sec:0,multi:0,social:0,vol:0,rb:1,cal:0,up:0}},
-  {t:"ORN", n:"Orion Group Holdings", sec:"Infra",     ico:"🏗️",ex:"NYSE",  p:8.42, cap:290, d:1.3, w:3.6, m:40.2, q:18.4, y:41.0,  bz:67,txt:"Zacks Rank #2. YTD +40.2%. EPS guidance +44.7%. AI construction.",tags:["Zacks #2","EPS +44.7%"],F:{ipo:0,sec:0,multi:0,social:0,vol:0,rb:0,cal:1,up:1}},
-  {t:"MYRG",n:"MYR Group Inc.",       sec:"Infra",     ico:"🏗️",ex:"NASDAQ",p:92.50,cap:1580,d:0.8, w:2.4, m:6.8,  q:-8.4, y:18.6,  bz:58,txt:"Contratista eléctrico grid/renovables/data centers. Backlog $4B+.",tags:["electrificación","AI grid"],F:{ipo:0,sec:0,multi:0,social:0,vol:0,rb:0,cal:1,up:0}},
-  {t:"FLG", n:"Flagstar Bank",        sec:"Banca",     ico:"🏦",ex:"NYSE",  p:12.28,cap:5110,d:0.6, w:2.4, m:-2.1, q:-8.4, y:14.8,  bz:64,txt:"Earnings 24 abril. Upside +22.6% ($15.06). JPMorgan upgrade.",tags:["earnings 24abr","upside 22%"],F:{ipo:0,sec:0,multi:0,social:0,vol:0,rb:1,cal:1,up:1}},
-  {t:"CUBI",n:"Customers Bancorp",    sec:"Banca",     ico:"🏦",ex:"NYSE",  p:38.50,cap:1180,d:1.2, w:3.4, m:8.6,  q:12.4, y:28.4,  bz:62,txt:"Banco fintech-first. Crecimiento orgánico. Ciclo tipos 2026.",tags:["fintech banking","tipos 2026"],F:{ipo:0,sec:0,multi:0,social:0,vol:0,rb:0,cal:1,up:0}},
-  {t:"SHAK",n:"Shake Shack Inc.",     sec:"Consumo",   ico:"🍔",ex:"NYSE",  p:94.39,cap:3900,d:2.18,w:5.2, m:8.4,  q:-4.6, y:32.8,  bz:66,txt:"Fast casual premium. Deal robots entrega. Same-store recovery.",tags:["fast casual","SERV deal"],F:{ipo:0,sec:0,multi:0,social:1,vol:0,rb:0,cal:1,up:0}},
-  {t:"WWW", n:"Wolverine World Wide", sec:"Consumo",   ico:"👟",ex:"NYSE",  p:12.15,cap:720, d:-0.8,w:2.4, m:6.8,  q:-14.2,y:28.4,  bz:65,txt:"Q4 beat: Saucony +26.4%. FCF $125.5M. CEO insider buying.",tags:["Saucony","CEO insider"],F:{ipo:0,sec:0,multi:0,social:0,vol:0,rb:1,cal:0,up:1}},
-  {t:"EVER",n:"EverQuote Inc.",       sec:"InsurTech", ico:"📊",ex:"NASDAQ",p:22.40,cap:980, d:1.8, w:4.6, m:12.3, q:-5.4, y:41.0,  bz:74,txt:"Zacks Rank #1 Strong Buy. Revenue Q3 +41% YoY. Objetivo $1B.",tags:["Zacks #1","revenue +41%"],F:{ipo:0,sec:0,multi:0,social:0,vol:0,rb:0,cal:1,up:1}},
-];
-
-// State para el radar (separado del estado global para no interferir)
-let RD = {
-  subtab: 'radar',   // 'radar' | 'gainers' | 'playbook'
-  hmode:  'all',     // 'all' | 'hype' | 'sel'
-  sels:   new Set(RD_SECS.map(s=>s.id)),
-  sort:   'score',
-  cap:    5000,
-  chart:  null,      // stock objeto o null
-  crange: 'm',       // d|w|m|q|y
-  added:  new Set(),
-  toast:  null,
-  toastT: null,
+// ─── MERCADOS & WATCHLIST ──────────────────────────────────────────────────────
+const MKT_GROUPS={
+  indices:{ico:'📊',label:'Índices',items:[
+    {sym:'^IBEX',n:'IBEX 35',cat:'ESP'},{sym:'^STOXX50E',n:'Euro Stoxx 50',cat:'EU'},
+    {sym:'^GDAXI',n:'DAX 40',cat:'DE'},{sym:'^FCHI',n:'CAC 40',cat:'FR'},
+    {sym:'^FTSE',n:'FTSE 100',cat:'UK'},{sym:'^GSPC',n:'S&P 500',cat:'US'},
+    {sym:'^IXIC',n:'Nasdaq',cat:'US'},{sym:'^DJI',n:'Dow Jones',cat:'US'},
+    {sym:'^N225',n:'Nikkei 225',cat:'JP'},{sym:'^HSI',n:'Hang Seng',cat:'HK'},
+  ]},
+  divisas:{ico:'💱',label:'Divisas',items:[
+    {sym:'EURUSD=X',n:'EUR/USD',cat:''},{sym:'EURGBP=X',n:'EUR/GBP',cat:''},
+    {sym:'EURJPY=X',n:'EUR/JPY',cat:''},{sym:'EURCHF=X',n:'EUR/CHF',cat:''},
+    {sym:'EURCNY=X',n:'EUR/CNY',cat:''},{sym:'EURCAD=X',n:'EUR/CAD',cat:''},
+    {sym:'BTC-EUR',n:'Bitcoin/EUR',cat:'Cripto'},{sym:'ETH-EUR',n:'Ethereum/EUR',cat:'Cripto'},
+  ]},
+  materias:{ico:'🛢️',label:'Materias Primas',items:[
+    {sym:'GC=F',n:'Oro ($/oz)',cat:''},{sym:'SI=F',n:'Plata ($/oz)',cat:''},
+    {sym:'CL=F',n:'Petróleo WTI',cat:''},{sym:'BZ=F',n:'Petróleo Brent',cat:''},
+    {sym:'NG=F',n:'Gas Natural',cat:''},{sym:'HG=F',n:'Cobre',cat:''},
+  ]},
+  rf:{ico:'📄',label:'Renta Fija',items:[
+    {sym:'^IRX',n:'T-Bill 3M',cat:'US'},{sym:'^FVX',n:'T-Note 5Y',cat:'US'},
+    {sym:'^TNX',n:'T-Note 10Y',cat:'US'},{sym:'^TYX',n:'T-Bond 30Y',cat:'US'},
+    {sym:'ES3Y=X',n:'Bund 3Y',cat:'EU'},{sym:'ES10Y=X',n:'Bund 10Y',cat:'EU'},
+  ]},
 };
-function rdSet(o){RD={...RD,...o};render();}
 
-// Scoring weights & labels
+// Cache for market prices: {sym: {price, pct, name, ts}}
+let MKT_CACHE={};
+let MKT_LOADING=new Set();
+
+async function mktFetchGroup(group){
+  const items=MKT_GROUPS[group]?.items||[];
+  const toFetch=items.filter(i=>!MKT_CACHE[i.sym]||Date.now()-MKT_CACHE[i.sym].ts>300000);
+  if(!toFetch.length)return;
+  toFetch.forEach(i=>MKT_LOADING.add(i.sym));
+  render(); // show loading state
+  await Promise.allSettled(toFetch.map(async item=>{
+    try{
+      const res=await fetchLivePrice(item.sym);
+      if(res&&res.price>0){
+        // Try to get pct change too
+        let pct=null;
+        try{
+          const r2=await tryFetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(item.sym)}?interval=1d&range=2d`);
+          const result=r2?.chart?.result?.[0];
+          if(result){
+            const closes=result.indicators?.quote?.[0]?.close||[];
+            const valid=closes.filter(x=>x!=null);
+            if(valid.length>=2) pct=((valid[valid.length-1]-valid[valid.length-2])/valid[valid.length-2])*100;
+          }
+        }catch(e){}
+        MKT_CACHE[item.sym]={price:res.price,pct,name:res.name||item.n,currency:res.currency||'',ts:Date.now()};
+      }
+    }catch(e){}
+    MKT_LOADING.delete(item.sym);
+  }));
+  render();
+}
+
+// Watchlist stored in user data
+function getWatchlist(){return S.user?.watchlist||[];}
+function addToWatchlist(sym,name){
+  if(getWatchlist().find(w=>w.sym===sym)){ntf('Ya está en la watchlist');return;}
+  const u2={...S.user,watchlist:[...(S.user.watchlist||[]),{sym,name,added:new Date().toISOString().slice(0,10)}]};
+  persist(u2);set({user:u2});ntf(`${sym} añadido a Watchlist`);
+  mktFetchGroup('watchlist');
+}
+function removeFromWatchlist(sym){
+  const u2={...S.user,watchlist:(S.user.watchlist||[]).filter(w=>w.sym!==sym)};
+  persist(u2);set({user:u2});
+}
+async function mktFetchWatchlist(){
+  const wl=getWatchlist();
+  if(!wl.length)return;
+  const toFetch=wl.filter(w=>!MKT_CACHE[w.sym]||Date.now()-MKT_CACHE[w.sym].ts>300000);
+  await Promise.allSettled(toFetch.map(async w=>{
+    const res=await fetchLivePrice(w.sym);
+    if(res&&res.price>0) MKT_CACHE[w.sym]={price:res.price,pct:null,name:w.name,currency:res.currency||'',ts:Date.now()};
+  }));
+  render();
+}
+
+// Chart fetch — returns array of {date, close}
+async function fetchChartData(sym, range='1mo', interval='1d'){
+  try{
+    const r=await tryFetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=${interval}&range=${range}`);
+    const result=r?.chart?.result?.[0];
+    if(!result) return null;
+    const ts=result.timestamp||[];
+    const closes=result.indicators?.quote?.[0]?.close||[];
+    return ts.map((t,i)=>({date:new Date(t*1000).toLocaleDateString('es-ES',{month:'short',day:'numeric'}),close:closes[i]})).filter(d=>d.close!=null);
+  }catch(e){return null;}
+}
+
+// Stock chart modal — full page chart with range selector
+let MCH={sym:null,name:'',range:'1mo',data:null,loading:false};
+async function openStockChart(sym,name){
+  MCH={sym,name,range:'1mo',data:null,loading:true};
+  render();
+  const data=await fetchChartData(sym,'1mo','1d');
+  MCH.data=data;MCH.loading=false;
+  render();
+}
+function closeStockChart(){MCH.sym=null;render();}
+async function changeChartRange(range){
+  const intervals={'1d':'5m','5d':'30m','1mo':'1d','3mo':'1d','6mo':'1wk','1y':'1wk','5y':'1mo'};
+  MCH.range=range;MCH.loading=true;MCH.data=null;render();
+  const data=await fetchChartData(MCH.sym,range,intervals[range]||'1d');
+  MCH.data=data;MCH.loading=false;
+  render();
+}
+
+function renderStockChartModal(){
+  const sym=MCH.sym,name=MCH.name;
+  const cached=MKT_CACHE[sym];
+  const data=MCH.data;
+  const ranges=[['1d','1D'],['5d','5D'],['1mo','1M'],['3mo','3M'],['6mo','6M'],['1y','1A'],['5y','5A']];
+  
+  // Build SVG chart from data
+  let chartSVG='<div style="display:flex;align-items:center;justify-content:center;height:200px;color:var(--text2);font-size:13px">⏳ Cargando datos...</div>';
+  if(data&&data.length>1&&!MCH.loading){
+    const W=340,H=170,pad=8,padt=20;
+    const vals=data.map(d=>d.close);
+    const hi=Math.max(...vals),lo=Math.min(...vals);
+    const rng=hi-lo||hi*0.02;
+    const up=vals[vals.length-1]>=vals[0];
+    const col=up?'var(--green)':'var(--red)';
+    const colFill=up?'rgba(76,175,125,0.12)':'rgba(224,82,82,0.12)';
+    const py=v=>padt+((H-padt-pad)*(1-(v-lo)/rng));
+    const px=i=>(W-pad*2)*i/(data.length-1)+pad;
+    const pts=data.map((d,i)=>`${px(i).toFixed(1)},${py(d.close).toFixed(1)}`).join(' ');
+    // Area fill path
+    const areaPath=`M${pad},${H-pad} L${data.map((d,i)=>`${px(i).toFixed(1)},${py(d.close).toFixed(1)}`).join(' L')} L${px(data.length-1).toFixed(1)},${H-pad} Z`;
+    // X axis labels (show ~5)
+    const step=Math.max(1,Math.floor(data.length/4));
+    const xLabels=data.filter((_,i)=>i%step===0||i===data.length-1).map((d,i,arr)=>`<text x="${px(i===0?0:data.length-1-(arr.length-1-i)*step).toFixed(0)}" y="${H}" fill="var(--text2)" font-size="8" text-anchor="middle">${d.date}</text>`).join('');
+    chartSVG=`<svg viewBox="0 0 ${W} ${H+10}" style="width:100%;height:200px;display:block">
+      <path d="${areaPath}" fill="${colFill}"/>
+      <polyline points="${pts}" fill="none" stroke="${col}" stroke-width="1.8" stroke-linejoin="round"/>
+      <text x="${pad}" y="${padt-3}" fill="var(--text2)" font-size="8" font-family="monospace">$${hi.toFixed(2)}</text>
+      <text x="${pad}" y="${H-pad-2}" fill="var(--text2)" font-size="8" font-family="monospace">$${lo.toFixed(2)}</text>
+      ${xLabels}
+    </svg>`;
+  } else if(!MCH.loading){
+    chartSVG='<div style="display:flex;align-items:center;justify-content:center;height:200px;color:var(--text2);font-size:12px">No se pudieron cargar los datos del gráfico.<br>Puede ser por restricciones CORS en el navegador.</div>';
+  }
+  
+  return `<div style="position:fixed;inset:0;background:rgba(0,0,0,.88);z-index:500;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this)closeStockChart()">
+    <div class="card" style="width:100%;max-width:480px;max-height:90vh;overflow-y:auto">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px">
+        <div>
+          <div style="font-size:18px;font-weight:800;color:var(--gold);font-family:monospace">${escH(sym)}</div>
+          <div style="font-size:11px;color:var(--text2)">${escH(name)}</div>
+          ${cached?`<div style="display:flex;align-items:baseline;gap:8px;margin-top:5px">
+            <span style="font-size:22px;font-weight:800;font-family:monospace">${cached.currency==='EUR'?fE(cached.price):cached.price.toFixed(2)+' '+cached.currency}</span>
+            ${cached.pct!=null?`<span style="font-size:13px;font-weight:700;padding:2px 7px;border-radius:6px;background:${cached.pct>=0?'rgba(76,175,125,.15)':'rgba(224,82,82,.15)'};color:${cached.pct>=0?'var(--green)':'var(--red)'};font-family:monospace">${cached.pct>=0?'+':''}${cached.pct.toFixed(2)}%</span>`:''}
+          </div>`:''}
+        </div>
+        <button class="bo" onclick="closeStockChart()" style="padding:6px 10px;font-size:14px">✕</button>
+      </div>
+      <!-- Range buttons -->
+      <div style="display:flex;gap:4px;margin-bottom:10px;flex-wrap:wrap">
+        ${ranges.map(([r,l])=>`<button class="${MCH.range===r?'ba':'bo'}" onclick="changeChartRange('${r}')" style="font-size:11px;padding:4px 9px;min-width:36px">${l}</button>`).join('')}
+      </div>
+      <!-- Chart -->
+      <div style="background:var(--bg3);border-radius:10px;padding:8px;margin-bottom:10px;min-height:200px">${chartSVG}</div>
+      <!-- Actions -->
+      <div style="display:flex;gap:8px">
+        <button class="bs" onclick="addToWatchlist('${sym}','${escH(name)}')" style="flex:1;font-size:12px">⭐ Añadir Watchlist</button>
+        <button class="bo" onclick="closeStockChart()" style="flex:1;font-size:12px">Cerrar</button>
+      </div>
+      <div style="font-size:9px;color:var(--text2);margin-top:8px;text-align:center">Datos con retraso 15-20 min · Yahoo Finance · No es asesoramiento</div>
+    </div>
+  </div>`;
+}
+
+function tabMercados(){
+  const group=S.mGroup||'indices';
+  const items=MKT_GROUPS[group]?.items||[];
+  const wl=getWatchlist();
+  
+  // Auto-fetch on first view
+  if(!items.every(i=>MKT_CACHE[i.sym])) {
+    setTimeout(()=>mktFetchGroup(group),100);
+  }
+  
+  const fmtPrice=(sym,cat)=>{
+    const d=MKT_CACHE[sym];
+    if(MKT_LOADING.has(sym)) return `<span style="color:var(--text2);font-size:11px">⏳</span>`;
+    if(!d) return `<span style="color:var(--text2);font-size:11px">—</span>`;
+    const isPct=(group==='rf');
+    const priceStr=isPct?d.price.toFixed(2)+'%':(d.currency==='EUR'?fE(d.price):d.price.toLocaleString('es-ES',{minimumFractionDigits:2,maximumFractionDigits:2})+' '+d.currency);
+    const pctStr=d.pct!=null?`<span style="color:${d.pct>=0?'var(--green)':'var(--red)'};font-size:11px;margin-left:4px">${d.pct>=0?'+':''}${d.pct.toFixed(2)}%</span>`:'';
+    return `<span style="font-weight:700;font-family:monospace">${priceStr}</span>${pctStr}`;
+  };
+  
+  return `<div class="sec">${MCH.sym?renderStockChartModal():''}
+  <div class="sech">
+    <div class="sect">📡 Mercados</div>
+    <button class="bo" onclick="mktFetchGroup('${group}');mktFetchWatchlist()" style="font-size:12px;padding:6px 10px">🔄 Actualizar</button>
+  </div>
+  
+  <!-- Group tabs -->
+  <div style="display:flex;gap:6px;margin-bottom:14px;overflow-x:auto;padding-bottom:2px;scrollbar-width:none">
+    ${Object.entries(MKT_GROUPS).map(([k,g])=>`
+      <button class="${group===k?'ba':'bo'}" onclick="set({mGroup:'${k}'})" style="flex-shrink:0;padding:7px 12px;font-size:12px">
+        ${g.ico} ${g.label}
+      </button>`).join('')}
+    <button class="${group==='watchlist'?'ba':'bo'}" onclick="set({mGroup:'watchlist'})" style="flex-shrink:0;padding:7px 12px;font-size:12px">
+      ⭐ Watchlist ${wl.length>0?`<span style="background:rgba(255,255,255,.2);border-radius:10px;padding:1px 5px;font-size:10px;margin-left:3px">${wl.length}</span>`:''}
+    </button>
+  </div>
+  
+  <!-- Market data cards -->
+  ${group!=='watchlist'?`
+  <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--r);overflow:hidden;margin-bottom:14px">
+    ${items.map((item,i)=>`
+      <div onclick="openStockChart('${item.sym}','${item.n}')" style="display:flex;justify-content:space-between;align-items:center;padding:11px 14px;border-bottom:${i<items.length-1?'1px solid rgba(74,53,32,.3)':'none'};cursor:pointer;transition:background .15s" onmouseover="this.style.background='rgba(210,138,63,.04)'" onmouseout="this.style.background=''">
+        <div>
+          <div style="font-weight:600;font-size:13px">${escH(item.n)}</div>
+          ${item.cat?`<div style="font-size:10px;color:var(--text2)">${item.cat}</div>`:''}
+        </div>
+        <div style="text-align:right">
+          ${fmtPrice(item.sym,item.cat)}
+          <div style="font-size:9px;color:var(--text2);margin-top:2px">📊 ver gráfico</div>
+        </div>
+      </div>`).join('')}
+  </div>`:``}
+  
+  <!-- Watchlist -->
+  ${group==='watchlist'?`
+  <div style="margin-bottom:12px">
+    <div style="display:flex;gap:8px;margin-bottom:12px">
+      <input id="wl-input" placeholder="Ticker (AAPL, MSFT, ITX.MC...)" style="flex:1"/>
+      <button class="ba" onclick="addWlItem()" style="white-space:nowrap;padding:8px 12px">+ Añadir</button>
+    </div>
+    ${wl.length===0?`<div style="text-align:center;color:var(--text2);padding:32px;font-size:13px">
+      <div style="font-size:32px;margin-bottom:8px">⭐</div>
+      Añade tickers para seguir su precio.<br>
+      <span style="font-size:11px">Ej: AAPL, NVDA, ITX.MC, BTC-EUR</span>
+    </div>`:`
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--r);overflow:hidden">
+      ${wl.map((w,i)=>`
+        <div onclick="openStockChart('${w.sym}','${escH(w.name)}')" style="display:flex;justify-content:space-between;align-items:center;padding:11px 14px;border-bottom:${i<wl.length-1?'1px solid rgba(74,53,32,.3)':'none'};cursor:pointer;transition:background .15s" onmouseover="this.style.background='rgba(210,138,63,.04)'" onmouseout="this.style.background=''">
+          <div>
+            <div style="font-weight:700;font-size:13px;color:var(--gold)">${escH(w.sym)}</div>
+            <div style="font-size:11px;color:var(--text2)">${escH(w.name)} · añadido ${w.added||''}</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px">
+            <div style="text-align:right">${fmtPrice(w.sym,'')}</div>
+            <button class="bd" onclick="event.stopPropagation();removeFromWatchlist('${w.sym}')" style="padding:3px 7px;font-size:11px">✕</button>
+          </div>
+        </div>`).join('')}
+    </div>`}
+  </div>`:``}
+  
+  <div style="font-size:10px;color:var(--text2);text-align:center;padding:8px 0">⏱ Datos con retraso 15-20 min · Yahoo Finance · Toca cualquier activo para ver el gráfico</div>
+  </div>`;
+}
+
+function addWlItem(){
+  const inp=document.getElementById('wl-input');
+  if(!inp||!inp.value.trim())return;
+  const sym=inp.value.trim().toUpperCase();
+  addToWatchlist(sym,sym);
+  inp.value='';
+}
+
+// ─── HERRAMIENTAS ──────────────────────────────────────────────────────────────
+function tabHerramientas(){
+  const htab=S.htab||'radar';
+  return `<div class="sec">${MCH.sym?renderStockChartModal():''}
+  <div class="sech"><div class="sect">🛠️ Herramientas</div></div>
+  
+  <!-- Sub-tabs -->
+  <div style="display:flex;background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:3px;margin-bottom:14px;gap:2px;overflow-x:auto;scrollbar-width:none">
+    ${[['radar','🎯 Radar'],['calculadoras','🔢 Calculadoras'],['playbook','📖 Playbook']].map(([id,l])=>`
+      <button class="${htab===id?'ba':'bo'}" onclick="set({htab:'${id}'})" style="flex:1;min-width:0;padding:8px 4px;font-size:11px;font-weight:700;border:none;border-radius:8px;white-space:nowrap">${l}</button>`).join('')}
+  </div>
+  
+  ${htab==='radar'?tabRadarInner():''}
+  ${htab==='calculadoras'?tabCalcs():''}
+  ${htab==='playbook'?tabPlaybook():''}
+  </div>`;
+}
+
+function tabCalcs(){
+  setTimeout(()=>{calcIC();calcR72();calcTIR();},80);
+  return `<div>
+  <!-- Interés compuesto -->
+  <div class="card" style="margin-bottom:12px">
+    <div style="font-weight:700;font-size:14px;margin-bottom:12px">📈 Calculadora de Interés Compuesto</div>
+    <div class="g2" style="margin-bottom:10px">
+      <div><label class="lbl">Capital inicial (€)</label><input type="number" id="ci-cap" value="10000" oninput="calcIC()"/></div>
+      <div><label class="lbl">Aportación mensual (€)</label><input type="number" id="ci-aport" value="500" oninput="calcIC()"/></div>
+      <div><label class="lbl">Rentabilidad anual (%)</label><input type="number" id="ci-rent" value="7" step="0.1" oninput="calcIC()"/></div>
+      <div><label class="lbl">Años</label><input type="number" id="ci-años" value="20" oninput="calcIC()"/></div>
+    </div>
+    <div id="ci-result" style="background:var(--bg3);border-radius:10px;padding:12px"></div>
+  </div>
+  <!-- Regla 72 -->
+  <div class="card" style="margin-bottom:12px">
+    <div style="font-weight:700;font-size:14px;margin-bottom:10px">⚡ Regla del 72</div>
+    <div class="g2" style="margin-bottom:10px">
+      <div><label class="lbl">Rentabilidad anual (%)</label><input type="number" id="r72-rent" value="7" step="0.1" oninput="calcR72()"/></div>
+      <div><label class="lbl">Años para doblar</label><input type="number" id="r72-años" value="" placeholder="auto" oninput="calcR72r()"/></div>
+    </div>
+    <div id="r72-result" style="background:var(--bg3);border-radius:10px;padding:12px;font-size:13px;color:var(--text2)"></div>
+  </div>
+  <!-- TIR manual -->
+  <div class="card">
+    <div style="font-weight:700;font-size:14px;margin-bottom:10px">📊 Cálculo de Rentabilidad</div>
+    <div class="g2" style="margin-bottom:10px">
+      <div><label class="lbl">Precio de compra (€)</label><input type="number" id="tir-compra" value="1000" oninput="calcTIR()"/></div>
+      <div><label class="lbl">Precio de venta (€)</label><input type="number" id="tir-venta" value="1350" oninput="calcTIR()"/></div>
+      <div><label class="lbl">Fecha de compra</label><input type="date" id="tir-fcompra" value="${new Date(Date.now()-365*2*86400000).toISOString().slice(0,10)}" oninput="calcTIR()"/></div>
+      <div><label class="lbl">Fecha de venta</label><input type="date" id="tir-fventa" value="${new Date().toISOString().slice(0,10)}" oninput="calcTIR()"/></div>
+    </div>
+    <div id="tir-result" style="background:var(--bg3);border-radius:10px;padding:12px"></div>
+  </div>
+  </div>`;
+}
+
+function calcIC(){
+  const cap=+document.getElementById('ci-cap')?.value||0;
+  const aport=+document.getElementById('ci-aport')?.value||0;
+  const rent=+document.getElementById('ci-rent')?.value||0;
+  const años=+document.getElementById('ci-años')?.value||0;
+  if(!años){return;}
+  const rm=Math.pow(1+rent/100,1/12)-1;
+  const n=años*12;
+  const fv=cap*Math.pow(1+rm,n)+(rm>0?aport*(Math.pow(1+rm,n)-1)/rm:aport*n);
+  const aportado=cap+aport*n;
+  const ganancia=fv-aportado;
+  const el=document.getElementById('ci-result');
+  if(el) el.innerHTML=`<div class="g3">
+    <div><div style="font-size:10px;color:var(--text2);margin-bottom:3px">CAPITAL FINAL</div><div style="font-size:18px;font-weight:800;color:var(--green)">${fE(Math.round(fv))}</div></div>
+    <div><div style="font-size:10px;color:var(--text2);margin-bottom:3px">APORTADO</div><div style="font-size:16px;font-weight:700;color:var(--blue)">${fE(Math.round(aportado))}</div></div>
+    <div><div style="font-size:10px;color:var(--text2);margin-bottom:3px">INTERESES</div><div style="font-size:16px;font-weight:700;color:var(--gold)">${fE(Math.round(ganancia))}</div></div>
+  </div>
+  <div style="margin-top:8px;font-size:11px;color:var(--text2)">Multiplicador: ×${(fv/Math.max(1,cap)).toFixed(1)} · Intereses = ${Math.round(ganancia/Math.max(1,aportado)*100)}% del capital aportado</div>`;
+}
+
+function calcR72(){
+  const rent=+document.getElementById('r72-rent')?.value||0;
+  const años=rent>0?(72/rent):null;
+  const el=document.getElementById('r72-result');
+  if(el&&años) el.innerHTML=`Con una rentabilidad del <b style="color:var(--green)">${rent}%/año</b>, tu dinero se dobla en aproximadamente <b style="color:var(--gold)">${años.toFixed(1)} años</b>.${años<=10?` A este ritmo, en 30 años ×${Math.pow(2,30/años).toFixed(0)}.`:''}`;
+}
+function calcR72r(){
+  const años=+document.getElementById('r72-años')?.value||0;
+  const rent=años>0?(72/años):null;
+  const el=document.getElementById('r72-result');
+  if(el&&rent) el.innerHTML=`Para doblar en <b style="color:var(--gold)">${años} años</b> necesitas una rentabilidad de aproximadamente <b style="color:var(--green)">${rent.toFixed(1)}%/año</b>.`;
+}
+function calcTIR(){
+  const compra=+document.getElementById('tir-compra')?.value||0;
+  const venta=+document.getElementById('tir-venta')?.value||0;
+  const fc=document.getElementById('tir-fcompra')?.value;
+  const fv=document.getElementById('tir-fventa')?.value;
+  if(!compra||!venta||!fc||!fv)return;
+  const dias=Math.max(1,Math.round((new Date(fv)-new Date(fc))/86400000));
+  const ganTotal=(venta-compra)/compra*100;
+  const tir=(Math.pow(1+(venta-compra)/compra,365/dias)-1)*100;
+  const el=document.getElementById('tir-result');
+  if(el) el.innerHTML=`<div class="g3">
+    <div><div style="font-size:10px;color:var(--text2);margin-bottom:3px">GANANCIA TOTAL</div><div style="font-size:17px;font-weight:800;color:${ganTotal>=0?'var(--green)':'var(--red)'}">${ganTotal>=0?'+':''}${ganTotal.toFixed(2)}%</div></div>
+    <div><div style="font-size:10px;color:var(--text2);margin-bottom:3px">TIR ANUALIZADA</div><div style="font-size:17px;font-weight:800;color:${tir>=0?'var(--green)':'var(--red)'}">${tir>=0?'+':''}${tir.toFixed(2)}%/año</div></div>
+    <div><div style="font-size:10px;color:var(--text2);margin-bottom:3px">DÍAS INVERSIÓN</div><div style="font-size:17px;font-weight:700;color:var(--text)">${dias}d · ${(dias/365).toFixed(1)}a</div></div>
+  </div>`;
+}
+
+function tabPlaybook(){
+  return `<div>
+  <div class="card" style="margin-bottom:10px;border-left:3px solid var(--accent)">
+    <div style="font-weight:700;font-size:13px;color:var(--accent);margin-bottom:5px">📖 Momentum Playbook · 8 Factores</div>
+    <div style="font-size:11px;color:var(--text2);line-height:1.6">Cada empresa del Radar recibe puntos según cuántos factores tiene activos. A más factores convergentes, mayor probabilidad de explosión de precio.</div>
+  </div>
+  ${[
+    {ico:'🚀',t:'① IPO/SPAC reciente · 22 pts',d:'Menos de 90 días. Flotante mínimo = explosiones con poco capital. Factor más potente. XNDU: +51% en 2 días.'},
+    {ico:'⚡',t:'② Sector en momentum · 18 pts',d:'Sector en máximo buzz. Hype score ≥50 = activo. Se recalibra dinámicamente con los gainers reales.'},
+    {ico:'🎯',t:'③ Multi-catalizador · 16 pts',d:'2+ catalizadores simultáneos. La combinación multiplica exponencialmente la probabilidad.'},
+    {ico:'🔥',t:'④ Buzz social · 14 pts',d:'Menciones crecientes Reddit, Stocktwits, X. El buzz precede al precio 24-72h.'},
+    {ico:'📊',t:'⑤ Volumen anómalo · 12 pts',d:'Volumen relativo >2× media 20 días. El volumen siempre precede al precio.'},
+    {ico:'📉',t:'⑥ Rebote técnico · 10 pts',d:'Caída previa -30/50% con fundamentales intactos. Atrae técnicos y value simultáneamente.'},
+    {ico:'📅',t:'⑦ Evento calendario · 5 pts',d:'FDA PDUFA, World X Day, earnings, conferencia sectorial. Predecible con semanas de antelación.'},
+    {ico:'🏦',t:'⑧ Upgrade/Insider · 3 pts',d:'Upgrade JPMorgan/Goldman o insider buying Form 4. Alta fiabilidad pero menos frecuente.'},
+  ].map(f=>`<div class="card" style="margin-bottom:8px">
+    <div style="font-size:13px;font-weight:700;margin-bottom:3px">${f.ico} ${f.t}</div>
+    <div style="font-size:11px;color:var(--text2);line-height:1.5">${f.d}</div>
+  </div>`).join('')}
+  <div class="card" style="border-left:3px solid var(--red);margin-top:4px">
+    <div style="font-weight:700;color:var(--red);margin-bottom:8px;font-size:13px">⚠ Gestión de Riesgo</div>
+    ${[['Posición máxima','1-3% portfolio'],['Stop loss','10-15% hard · innegociable'],['Horizonte','1-10 días · si no se mueve, catalizador falló'],['Toma parcial','+25% vende 1/3 · +50% vende 1/3 · trailing el resto']].map(([l,v])=>`
+    <div style="display:flex;justify-content:space-between;border-bottom:1px solid var(--border);padding:6px 0;font-size:12px">
+      <span style="color:var(--text2)">${l}</span><span style="font-weight:700">${v}</span>
+    </div>`).join('')}
+    <div style="font-size:10px;color:var(--text2);margin-top:8px">⚠ No constituye recomendación de inversión · Solo perfiles dinámico/agresivo · Renta 4</div>
+  </div>
+  </div>`;
+}
+
+// tabRadarInner — moves the Radar logic here (called from Herramientas)
+// RD state, RD_STOCKS, scoring etc are defined at bottom of file
+
+
+// ─── MOMENTUM RADAR ────────────────────────────────────────────────────────────
+const RD_SECS=[
+  {id:'Quantum',  lbl:'Quantum',        ico:'⚛️',hype:true},
+  {id:'Photonics',lbl:'AI Photonics',   ico:'💡',hype:true},
+  {id:'AI',       lbl:'AI / Robots',    ico:'🤖',hype:true},
+  {id:'EV',       lbl:'EV / Auto',      ico:'🚗',hype:true},
+  {id:'Bitcoin',  lbl:'Bitcoin+AI',     ico:'₿', hype:true},
+  {id:'Renovables',lbl:'Renovables',    ico:'♻️',hype:false},
+  {id:'Infra',    lbl:'Infraestructura',ico:'🏗️',hype:false},
+  {id:'Banca',    lbl:'Banca',          ico:'🏦',hype:false},
+  {id:'Consumo',  lbl:'Consumo',        ico:'🛍️',hype:false},
+  {id:'InsurTech',lbl:'InsurTech',      ico:'📊',hype:false},
+];
+const RD_STOCKS=[
+  {t:'XNDU',n:'Xanadu Quantum Tech.', sec:'Quantum',  ico:'⚛️',ex:'NASDAQ',p:22.44,cap:359, d:51.3,w:35.0,m:11.1, q:null,  y:null,  bz:98,txt:'IPO 27 mar vía SPAC, flotante mínimo. +51% en 2 días. NVIDIA Ising + World Quantum Day.',tags:['IPO reciente','SPAC','World Q Day'],F:{ipo:1,sec:1,multi:1,social:1,vol:1,rb:0,cal:1,up:0}},
+  {t:'IONQ',n:'IonQ Inc.',             sec:'Quantum',  ico:'⚛️',ex:'NYSE',  p:36.59,cap:9800,d:20.1,w:18.3,m:-12.4,q:-45.2,y:55.6,  bz:94,txt:'Rally +20% por NVIDIA Ising. Contrato DARPA HARQ. Vol 68M vs media 22M.',tags:['quantum','NVIDIA','DARPA'],F:{ipo:0,sec:1,multi:1,social:1,vol:1,rb:1,cal:1,up:0}},
+  {t:'QBTS',n:'D-Wave Quantum',        sec:'Quantum',  ico:'⚛️',ex:'NYSE',  p:14.43,cap:3200,d:14.4,w:12.8,m:-8.6, q:-38.4,y:458.0, bz:91,txt:'Adquisición anunciada + bookings récord. Upside +168.7%.',tags:['quantum','adquisición','upside 168%'],F:{ipo:0,sec:1,multi:1,social:1,vol:1,rb:1,cal:1,up:0}},
+  {t:'RGTI',n:'Rigetti Computing',     sec:'Quantum',  ico:'⚛️',ex:'NASDAQ',p:14.04,cap:1900,d:4.98,w:9.2, m:-15.3,q:-52.1,y:545.0, bz:89,txt:'+545% en 12 meses. Azure Quantum + Amazon Braket.',tags:['quantum','Microsoft','Amazon'],F:{ipo:0,sec:1,multi:1,social:1,vol:1,rb:1,cal:1,up:0}},
+  {t:'QUBT',n:'Quantum Computing Inc.',sec:'Quantum',  ico:'⚛️',ex:'NASDAQ',p:7.82, cap:650, d:2.35,w:8.1, m:-11.4,q:-44.8,y:67.0,  bz:83,txt:'Menor cap del sector quantum. Mayor upside % si sector continúa.',tags:['quantum','menor cap'],F:{ipo:0,sec:1,multi:0,social:1,vol:0,rb:1,cal:1,up:0}},
+  {t:'POET',n:'POET Technologies',     sec:'Photonics',ico:'💡',ex:'NASDAQ',p:6.96, cap:920, d:5.9, w:8.4, m:22.4, q:-18.3,y:94.4,  bz:96,txt:'Earnings próximo lunes. Optical engines AI. Vol 23M vs media 12M.',tags:['AI photonics','earnings','vol x2'],F:{ipo:0,sec:1,multi:1,social:1,vol:1,rb:0,cal:1,up:0}},
+  {t:'LWLG',n:'Lightwave Logic',       sec:'Photonics',ico:'💡',ex:'NASDAQ',p:18.50,cap:1580,d:8.2, w:14.6,m:55.2, q:12.4, y:141.9, bz:82,txt:'Polímero electroóptico para AI datacenters. Cap +55% en 1 mes.',tags:['AI photonics','polímero EO'],F:{ipo:0,sec:1,multi:0,social:0,vol:1,rb:0,cal:0,up:0}},
+  {t:'SERV',n:'Serve Robotics',        sec:'AI',       ico:'🤖',ex:'NASDAQ',p:8.45, cap:420, d:5.42,w:11.3,m:28.6, q:-22.4,y:142.3, bz:87,txt:'Deal DoorDash esta semana. Robots reparto Uber Eats. Nvidia inversor.',tags:['robots','DoorDash','Nvidia'],F:{ipo:0,sec:1,multi:1,social:1,vol:1,rb:1,cal:0,up:0}},
+  {t:'IREN',n:'IREN Ltd.',             sec:'AI',       ico:'🤖',ex:'NASDAQ',p:9.58, cap:780, d:4.01,w:6.8, m:-18.2,q:-35.6,y:88.4,  bz:85,txt:'WSB 2026 Index pick. Bitcoin mining → AI cloud.',tags:['AI cloud','WSB 2026'],F:{ipo:0,sec:1,multi:0,social:1,vol:0,rb:1,cal:0,up:0}},
+  {t:'LCID',n:'Lucid Group',           sec:'EV',       ico:'🚗',ex:'NASDAQ',p:8.27, cap:2900,d:12.0,w:8.4, m:-18.6,q:-44.2,y:-68.0, bz:82,txt:'HOY +12%: CEO nuevo + deal Uber 35k robotaxis + $1.05B capital.',tags:['CEO nuevo','Uber deal','$1.05B'],F:{ipo:0,sec:1,multi:1,social:1,vol:1,rb:1,cal:1,up:1}},
+  {t:'RIVN',n:'Rivian Automotive',     sec:'EV',       ico:'🚗',ex:'NASDAQ',p:16.07,cap:19800,d:1.7,w:1.6,m:-8.2, q:-15.4,y:-18.0, bz:74,txt:'Q1 entregas +20% YoY. R2 launch $58k. Earnings 30 abril.',tags:['R2 launch','Uber deal','earnings 30abr'],F:{ipo:0,sec:1,multi:1,social:1,vol:0,rb:1,cal:1,up:1}},
+  {t:'CHPT',n:'ChargePoint Holdings',  sec:'EV',       ico:'🚗',ex:'NYSE',  p:6.30, cap:153, d:9.0, w:6.5, m:-18.4,q:-42.3,y:-64.0, bz:71,txt:'CEO insider buying 13 abril → +9%. Upside +101% ($9.67 target).',tags:['CEO insider','upside 101%','rebote'],F:{ipo:0,sec:1,multi:1,social:0,vol:1,rb:1,cal:1,up:1}},
+  {t:'CLSK',n:'CleanSpark Inc.',       sec:'Bitcoin',  ico:'₿', ex:'NASDAQ',p:9.58, cap:850, d:4.01,w:7.4, m:-14.8,q:-28.3,y:45.2,  bz:81,txt:'Expansión AI computing. Insider buying feb. Zacks análisis.',tags:['bitcoin','AI pivot','insider'],F:{ipo:0,sec:0,multi:0,social:0,vol:0,rb:1,cal:0,up:1}},
+  {t:'ARRY',n:'Array Technologies',   sec:'Renovables',ico:'♻️',ex:'NASDAQ',p:7.85, cap:1100,d:2.1, w:5.4, m:-22.8,q:-38.4,y:-45.2, bz:62,txt:'Solar tracking líder. Caída -45% YTD. Backlog récord.',tags:['solar','backlog record'],F:{ipo:0,sec:0,multi:0,social:0,vol:0,rb:1,cal:1,up:0}},
+  {t:'PLUG',n:'Plug Power',           sec:'Renovables',ico:'♻️',ex:'NASDAQ',p:2.84, cap:1650,d:1.8, w:3.2, m:-28.6,q:-48.2,y:-72.0, bz:58,txt:'Hidrógeno verde. DOE loan $1.66B. Caída -72% = rebote extremo.',tags:['hidrógeno','DOE loan'],F:{ipo:0,sec:0,multi:0,social:0,vol:0,rb:1,cal:0,up:0}},
+  {t:'ORN', n:'Orion Group Holdings', sec:'Infra',     ico:'🏗️',ex:'NYSE',  p:8.42, cap:290, d:1.3, w:3.6, m:40.2, q:18.4, y:41.0,  bz:67,txt:'Zacks Rank #2. YTD +40.2%. EPS guidance +44.7%. AI construction.',tags:['Zacks #2','EPS +44.7%'],F:{ipo:0,sec:0,multi:0,social:0,vol:0,rb:0,cal:1,up:1}},
+  {t:'MYRG',n:'MYR Group Inc.',       sec:'Infra',     ico:'🏗️',ex:'NASDAQ',p:92.50,cap:1580,d:0.8, w:2.4, m:6.8,  q:-8.4, y:18.6,  bz:58,txt:'Contratista eléctrico grid/renovables/data centers. Backlog $4B+.',tags:['electrificación','AI grid'],F:{ipo:0,sec:0,multi:0,social:0,vol:0,rb:0,cal:1,up:0}},
+  {t:'FLG', n:'Flagstar Bank',        sec:'Banca',     ico:'🏦',ex:'NYSE',  p:12.28,cap:5110,d:0.6, w:2.4, m:-2.1, q:-8.4, y:14.8,  bz:64,txt:'Earnings 24 abril. Upside +22.6% ($15.06). JPMorgan upgrade.',tags:['earnings 24abr','upside 22%'],F:{ipo:0,sec:0,multi:0,social:0,vol:0,rb:1,cal:1,up:1}},
+  {t:'CUBI',n:'Customers Bancorp',    sec:'Banca',     ico:'🏦',ex:'NYSE',  p:38.50,cap:1180,d:1.2, w:3.4, m:8.6,  q:12.4, y:28.4,  bz:62,txt:'Banco fintech-first. Crecimiento orgánico. Ciclo tipos 2026.',tags:['fintech banking','tipos 2026'],F:{ipo:0,sec:0,multi:0,social:0,vol:0,rb:0,cal:1,up:0}},
+  {t:'SHAK',n:'Shake Shack Inc.',     sec:'Consumo',   ico:'🍔',ex:'NYSE',  p:94.39,cap:3900,d:2.18,w:5.2, m:8.4,  q:-4.6, y:32.8,  bz:66,txt:'Fast casual premium. Deal robots entrega. Same-store recovery.',tags:['fast casual','SERV deal'],F:{ipo:0,sec:0,multi:0,social:1,vol:0,rb:0,cal:1,up:0}},
+  {t:'WWW', n:'Wolverine World Wide', sec:'Consumo',   ico:'👟',ex:'NYSE',  p:12.15,cap:720, d:-0.8,w:2.4, m:6.8,  q:-14.2,y:28.4,  bz:65,txt:'Q4 beat: Saucony +26.4%. FCF $125.5M. CEO insider buying.',tags:['Saucony','CEO insider'],F:{ipo:0,sec:0,multi:0,social:0,vol:0,rb:1,cal:0,up:1}},
+  {t:'EVER',n:'EverQuote Inc.',       sec:'InsurTech', ico:'📊',ex:'NASDAQ',p:22.40,cap:980, d:1.8, w:4.6, m:12.3, q:-5.4, y:41.0,  bz:74,txt:'Zacks Rank #1 Strong Buy. Revenue Q3 +41% YoY. Objetivo $1B.',tags:['Zacks #1','revenue +41%'],F:{ipo:0,sec:0,multi:0,social:0,vol:0,rb:0,cal:1,up:1}},
+];
 const RDW={ipo:22,sec:18,multi:16,social:14,vol:12,rb:10,cal:5,up:3};
-const RDFL={ipo:"IPO/SPAC",sec:"Sector hot",multi:"Multi-cat",social:"Buzz",vol:"Vol×2",rb:"Rebote",cal:"Evento",up:"Upgrade"};
-
+const RDFL={ipo:'IPO/SPAC',sec:'Sector hot',multi:'Multi-cat',social:'Buzz',vol:'Vol×2',rb:'Rebote',cal:'Evento',up:'Upgrade'};
 function rdHype(){
-  const cnt={},pt={};
-  RD_SECS.forEach(s=>{cnt[s.id]=0;pt[s.id]=0;});
+  const cnt={},pt={};RD_SECS.forEach(s=>{cnt[s.id]=0;pt[s.id]=0;});
   RD_STOCKS.forEach(g=>{if(cnt[g.sec]!==undefined){cnt[g.sec]++;pt[g.sec]+=Math.abs(g.d||0);}});
   const mc=Math.max(...Object.values(cnt),1),mp=Math.max(...Object.values(pt),1),sc={};
   RD_SECS.forEach(s=>{sc[s.id]=Math.min((s.hype?40:0)+Math.round((cnt[s.id]/mc)*35+(pt[s.id]/mp)*25),100);});
   return sc;
 }
-function rdScore(s,hs){
-  let n=0;
-  for(const[k,w]of Object.entries(RDW)){
-    if(k==='sec'){if((hs[s.sec]||0)>=50)n+=w;}else if(s.F[k])n+=w;
-  }
-  return Math.min(n+Math.round((s.bz/100)*10),100);
-}
-function rdLabel(n){
-  if(n>=80)return{t:'🔴 EXPLOSIVO',c:'var(--red)'};
-  if(n>=65)return{t:'🟠 MUY ALTO', c:'var(--yellow)'};
-  if(n>=50)return{t:'🟡 ALTO',     c:'var(--gold)'};
-  if(n>=35)return{t:'🔵 MODERADO', c:'var(--blue)'};
-  return          {t:'⚪ BAJO',     c:'var(--text2)'};
-}
+function rdScore(s,hs){let n=0;for(const[k,w]of Object.entries(RDW)){if(k==='sec'){if((hs[s.sec]||0)>=50)n+=w;}else if(s.F[k])n+=w;}return Math.min(n+Math.round((s.bz/100)*10),100);}
+function rdLabel(n){if(n>=80)return{t:'🔴 EXPLOSIVO',c:'var(--red)'};if(n>=65)return{t:'🟠 MUY ALTO',c:'var(--yellow)'};if(n>=50)return{t:'🟡 ALTO',c:'var(--gold)'};if(n>=35)return{t:'🔵 MODERADO',c:'var(--blue)'};return{t:'⚪ BAJO',c:'var(--text2)'};}
 function rdPct(v){if(v==null)return'—';const n=+v;return isNaN(n)?'—':(n>=0?'+':'')+n.toFixed(1)+'%';}
 function rdCol(v){const n=+v;return isNaN(n)||v==null?'var(--text2)':n>0?'var(--green)':n<0?'var(--red)':'var(--text2)';}
 function rdCap(m){return m>=1000?'$'+(m/1000).toFixed(1)+'B':'$'+m+'M';}
 
-// ── Mini bar chart (SVG, no deps) ─────────────────────────────────────────────
-function rdChartSVG(stock, range){
-  const seed=stock.t.split('').reduce((a,c)=>a+c.charCodeAt(0),0);
+function rdChartSVG(stock,range){
+  const seed=stock.t.split('').reduce((a,c2)=>a+c2.charCodeAt(0),0);
   const rng=i=>{const x=Math.sin(i*seed+i)*10000;return x-Math.floor(x);};
-  const totalPct={d:stock.d,w:stock.w,m:stock.m,q:stock.q,y:stock.y}[range]??stock.m??0;
-  let price=stock.p*(1-(totalPct/100));
+  const tp={d:stock.d,w:stock.w,m:stock.m,q:stock.q,y:stock.y}[range]??stock.m??0;
+  let price=stock.p*(1-(tp/100));
   const bars=[];const n=50;
   for(let i=0;i<n;i++){
     const noise=(rng(i+1)-0.48)*stock.p*0.022;
-    const drift=(totalPct/100/n)*stock.p;
+    const drift=(tp/100/n)*stock.p;
     price=Math.max(0.01,price+noise+drift);
     bars.push({v:price,up:price>=(bars[bars.length-1]?.v||price)});
   }
-  const hi=Math.max(...bars.map(b=>b.v));
-  const lo=Math.min(...bars.map(b=>b.v));
+  const hi=Math.max(...bars.map(b=>b.v)),lo=Math.min(...bars.map(b=>b.v));
   const rng2=hi-lo||hi*0.02;
   const W=340,H=100,pad=4;
   const bw=Math.max(2,(W-pad*2)/n-1);
   const py=v=>H-pad-((v-lo)/rng2)*(H-pad*2);
-  const bars_svg=bars.map((b,i)=>{
-    const x=pad+i*(bw+1);
-    const col=b.up?'#4caf7d':'#e05252';
-    return `<rect x="${x.toFixed(1)}" y="${py(b.v).toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(2,(H-pad-py(b.v))).toFixed(1)}" fill="${col}" opacity="0.85" rx="1"/>`;
-  }).join('');
-  // Area line
   const pts=bars.map((b,i)=>`${(pad+i*(bw+1)+bw/2).toFixed(1)},${py(b.v).toFixed(1)}`).join(' ');
-  const up=bars[bars.length-1].v>=bars[0].v;
-  const linecol=up?'#4caf7d':'#e05252';
-  return `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:120px;display:block">
-    <rect width="${W}" height="${H}" fill="var(--bg3)" rx="8"/>
-    ${bars_svg}
-    <polyline points="${pts}" fill="none" stroke="${linecol}" stroke-width="1.5" opacity="0.6"/>
-    <text x="${pad+2}" y="${H-pad-2}" fill="var(--text2)" font-size="9" font-family="monospace">$${lo.toFixed(2)}</text>
-    <text x="${W-pad-2}" y="${H-pad-2}" fill="var(--text2)" font-size="9" font-family="monospace" text-anchor="end">$${hi.toFixed(2)}</text>
+  const up2=bars[bars.length-1].v>=bars[0].v;
+  return `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:110px;display:block">
+    <rect width="${W}" height="${H}" fill="var(--bg3)" rx="7"/>
+    ${bars.map((b,i)=>{const x=pad+i*(bw+1);return `<rect x="${x.toFixed(1)}" y="${py(b.v).toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(2,H-pad-py(b.v)).toFixed(1)}" fill="${b.up?'#4caf7d':'#e05252'}" opacity="0.82" rx="1"/>`;}).join('')}
+    <polyline points="${pts}" fill="none" stroke="${up2?'#4caf7d':'#e05252'}" stroke-width="1.5" opacity="0.5"/>
+    <text x="${pad+2}" y="${H-pad-2}" fill="var(--text2)" font-size="8" font-family="monospace">$${lo.toFixed(2)}</text>
+    <text x="${W-pad-2}" y="${H-pad-2}" fill="var(--text2)" font-size="8" font-family="monospace" text-anchor="end">$${hi.toFixed(2)}</text>
   </svg>`;
 }
 
-// ── Add to investments ────────────────────────────────────────────────────────
-function rdAddToInversiones(t){
-  const stock=RD_STOCKS.find(s=>s.t===t);
-  if(!stock)return;
-  const u=S.user;
-  if(!u.inversiones)u.inversiones=[];
-  // Check duplicate
-  if(u.inversiones.find(i=>i.ticker===stock.t&&i.estado==='abierta')){
-    rdToast('ℹ️ '+stock.t+' ya está en Inversiones');return;
-  }
-  const inv={
-    id:'rd_'+Date.now()+'_'+Math.random().toString(36).slice(2,6),
-    nombre:stock.n,
-    ticker:stock.t,
-    tipo:'Acción',
-    mercado:stock.ex,
-    isin:'',
-    sector:stock.sec,
-    titulares:[],
-    aportaciones:[{
-      id:'a1',fecha:new Date().toISOString().slice(0,10),
-      cantidad:1,precio:stock.p,
-      divisa:'USD',origen:'externo'
-    }],
-    estado:'abierta',
-    notas:'Añadido desde Radar de Oportunidades · Score: '+rdScore(stock,rdHype())+'/100',
-  };
-  u.inversiones.push(inv);
-  persist(u);
-  set({user:u});
-  RD.added.add(t);
-  rdToast('✅ '+stock.t+' añadido a Inversiones');
-}
-function rdToast(msg){
-  if(RD.toastT)clearTimeout(RD.toastT);
-  RD.toast=msg;
-  RD.toastT=setTimeout(()=>{RD.toast=null;render();},2500);
-}
+let RD={subtab:'radar',hmode:'all',sels:new Set(RD_SECS.map(s=>s.id)),sort:'score',cap:5000,chart:null,crange:'m',added:new Set(),toast:null,toastT:null};
 
-// ── Chart modal ───────────────────────────────────────────────────────────────
-function rdOpenChart(ticker,range){
-  const s=RD_STOCKS.find(x=>x.t===ticker);
-  if(!s)return;
-  RD.chart=s;RD.crange=range||'m';render();
+function rdAddToInversiones(t){
+  const stock=RD_STOCKS.find(s=>s.t===t);if(!stock)return;
+  const u=S.user;if(!u.inv)u.inv=[];
+  if(u.inv.find(i=>i.ticker===stock.t&&i.abierta!==false)){rdToast('ℹ️ '+stock.t+' ya está en Inversiones');return;}
+  const ni={id:Date.now(),nombre:stock.n,ticker:stock.t,tipo:'Acción',entidad:'',titularId:(u.titulares&&u.titulares[0])?u.titulares[0].id:'',
+    qty:1,pC:stock.p,pA:stock.p,fecha:new Date().toISOString().slice(0,10),origen:'externo',abierta:true,
+    notas:'Añadido desde Radar · Score: '+rdScore(stock,rdHype())+'/100'};
+  u.inv.push(ni);persist(u);set({user:u});
+  RD.added.add(t);rdToast('✅ '+stock.t+' añadido a Inversiones');
 }
-function rdCloseChart(){RD.chart=null;render();}
+function rdToast(msg){if(RD.toastT)clearTimeout(RD.toastT);RD.toast=msg;RD.toastT=setTimeout(()=>{RD.toast=null;render();},2500);}
 
 function rdChartModal(){
-  const s=RD.chart;
-  const hs=rdHype();
-  const sc=rdScore(s,hs);
-  const el=rdLabel(sc);
+  const s=RD.chart;const hs=rdHype();const sc=rdScore(s,hs);const el=rdLabel(sc);
   const ranges=[['1D','d',s.d],['1S','w',s.w],['1M','m',s.m],['3M','q',s.q],['12M','y',s.y]];
   const isAdded=RD.added.has(s.t);
-  return `
-  <div style="position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:999;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this)rdCloseChart()">
+  return `<div style="position:fixed;inset:0;background:rgba(0,0,0,.88);z-index:400;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this){RD.chart=null;render()}">
     <div class="card" style="width:100%;max-width:460px;max-height:90vh;overflow-y:auto">
-      <!-- Header -->
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
         <div>
           <div style="display:flex;align-items:center;gap:8px">
-            <span style="font-size:20px;font-weight:800;color:var(--accent);font-family:monospace">${s.ico} ${s.t}</span>
-            <span class="badge" style="background:rgba(210,138,63,.18);color:var(--gold);border:1px solid rgba(210,138,63,.3)">${s.sec}</span>
+            <span style="font-size:18px;font-weight:800;color:var(--gold);font-family:monospace">${s.ico} ${s.t}</span>
+            <span class="byy" style="font-size:10px">${s.sec}</span>
           </div>
-          <div style="font-size:11px;color:var(--text2);margin-top:2px">${s.n}</div>
-          <div style="display:flex;align-items:baseline;gap:8px;margin-top:6px">
-            <span style="font-size:22px;font-weight:800;font-family:monospace">$${s.p.toFixed(2)}</span>
+          <div style="font-size:11px;color:var(--text2)">${s.n}</div>
+          <div style="display:flex;align-items:baseline;gap:8px;margin-top:5px">
+            <span style="font-size:20px;font-weight:800;font-family:monospace">$${s.p.toFixed(2)}</span>
             <span style="font-size:12px;font-weight:700;padding:2px 7px;border-radius:6px;background:${s.d>=0?'rgba(76,175,125,.15)':'rgba(224,82,82,.15)'};color:${s.d>=0?'var(--green)':'var(--red)'};font-family:monospace">${rdPct(s.d)}</span>
           </div>
         </div>
-        <button class="bo" onclick="rdCloseChart()" style="padding:6px 10px;font-size:14px">✕</button>
+        <button class="bo" onclick="RD.chart=null;render()" style="padding:6px 10px">✕</button>
       </div>
-      <!-- Range selector -->
-      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:4px;margin-bottom:10px">
-        ${ranges.map(([l,k,v])=>`
-          <div onclick="RD.crange='${k}';render()" style="text-align:center;background:${RD.crange===k?'rgba(192,60,59,.18)':'var(--bg3)'};border:1px solid ${RD.crange===k?'var(--accent)':'var(--border)'};border-radius:8px;padding:6px 2px;cursor:pointer">
-            <div style="font-size:9px;color:var(--text2);margin-bottom:2px">${l}</div>
-            <div style="font-size:11px;font-weight:700;color:${rdCol(v)};font-family:monospace">${rdPct(v)}</div>
-          </div>`).join('')}
+      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:3px;margin-bottom:8px">
+        ${ranges.map(([l,k,v])=>`<div onclick="RD.crange='${k}';render()" style="text-align:center;background:${RD.crange===k?'rgba(210,138,63,.18)':'var(--bg3)'};border:1px solid ${RD.crange===k?'var(--gold)':'var(--border)'};border-radius:7px;padding:5px 2px;cursor:pointer">
+          <div style="font-size:8px;color:var(--text2);margin-bottom:1px">${l}</div>
+          <div style="font-size:10px;font-weight:700;color:${rdCol(v)};font-family:monospace">${rdPct(v)}</div>
+        </div>`).join('')}
       </div>
-      <!-- Chart SVG -->
       ${rdChartSVG(s,RD.crange)}
-      <!-- Score -->
-      <div style="background:var(--bg3);border-radius:10px;padding:10px 12px;margin:10px 0">
+      <div style="background:var(--bg3);border-radius:9px;padding:9px 11px;margin:9px 0">
         <div style="display:flex;justify-content:space-between;margin-bottom:4px">
-          <span style="font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:.05em">Playbook Score</span>
-          <span style="font-size:13px;font-weight:800;color:${el.c};font-family:monospace">${sc}/100 · ${el.t}</span>
+          <span style="font-size:9px;color:var(--text2);text-transform:uppercase;letter-spacing:.04em">Score Playbook</span>
+          <span style="font-size:12px;font-weight:800;color:${el.c};font-family:monospace">${sc}/100 · ${el.t}</span>
         </div>
-        <div style="height:4px;background:var(--border);border-radius:2px;overflow:hidden;margin-bottom:7px">
+        <div style="height:4px;background:var(--border);border-radius:2px;overflow:hidden;margin-bottom:6px">
           <div style="height:100%;width:${sc}%;background:${el.c};border-radius:2px"></div>
         </div>
         <div style="display:flex;flex-wrap:wrap;gap:3px">
-          ${Object.keys(RDW).map(k=>{
-            const active=k==='sec'?(rdHype()[s.sec]||0)>=50:s.F[k];
-            return `<span style="font-size:8px;padding:1px 5px;border-radius:2px;background:${active?'rgba(76,175,125,.12)':'var(--bg3)'};color:${active?'var(--green)':'var(--text2)'};border:1px solid ${active?'rgba(76,175,125,.3)':'var(--border)'};text-decoration:${active?'none':'line-through'};opacity:${active?1:.4};font-family:monospace">${RDFL[k]}</span>`;
-          }).join('')}
+          ${Object.keys(RDW).map(k=>{const active=k==='sec'?(rdHype()[s.sec]||0)>=50:s.F[k];return `<span style="font-size:8px;padding:1px 5px;border-radius:2px;background:${active?'rgba(76,175,125,.1)':'var(--bg3)'};color:${active?'var(--green)':'var(--text2)'};border:1px solid ${active?'rgba(76,175,125,.25)':'var(--border)'};text-decoration:${active?'none':'line-through'};opacity:${active?1:.4};font-family:monospace">${RDFL[k]}</span>`;}).join('')}
         </div>
       </div>
-      <!-- Catalizador -->
-      <div style="background:var(--bg3);border-radius:10px;padding:10px 12px;margin-bottom:12px">
-        <div style="font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px">📡 Catalizador</div>
-        <div style="font-size:12px;line-height:1.55">${s.txt}</div>
-        <div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:7px">
-          ${s.tags.map(tg=>`<span style="font-size:9px;padding:1px 6px;border-radius:3px;background:rgba(76,175,125,.12);color:var(--green);border:1px solid rgba(76,175,125,.25)">${tg}</span>`).join('')}
-        </div>
+      <div style="background:var(--bg3);border-radius:9px;padding:9px 11px;margin-bottom:10px">
+        <div style="font-size:9px;color:var(--text2);text-transform:uppercase;margin-bottom:4px">📡 Catalizador</div>
+        <div style="font-size:12px;line-height:1.5">${s.txt}</div>
+        <div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:6px">${s.tags.map(tg=>`<span style="font-size:9px;padding:1px 6px;border-radius:3px;background:rgba(76,175,125,.1);color:var(--green);border:1px solid rgba(76,175,125,.2)">${tg}</span>`).join('')}</div>
       </div>
-      <!-- Actions -->
       <div style="display:flex;gap:8px">
-        <button class="${isAdded?'bs':'ba'}" onclick="rdAddToInversiones('${s.t}');rdCloseChart()" style="flex:1;padding:11px;font-size:13px;font-weight:600" ${isAdded?'disabled':''}>
+        <button class="${isAdded?'bs':'ba'}" onclick="rdAddToInversiones('${s.t}');RD.chart=null;render()" style="flex:1;padding:11px;font-size:13px;font-weight:600" ${isAdded?'disabled':''}>
           ${isAdded?'✓ En Inversiones':'+ Añadir a Inversiones'}
         </button>
       </div>
-      <div style="font-size:9px;color:var(--text2);text-align:center;margin-top:8px">Gráfico ilustrativo · Verificar precio real antes de operar · Renta 4</div>
+      <div style="font-size:9px;color:var(--text2);text-align:center;margin-top:7px">Gráfico ilustrativo · Verificar precio real antes de operar · Renta 4</div>
     </div>
   </div>`;
 }
 
-// ── Main tabRadar function ────────────────────────────────────────────────────
-function tabRadar(){
+function tabRadarInner(){
   const hs=rdHype();
-
-  // Build filtered+sorted list
   let list=RD_STOCKS.filter(s=>RD.sels.has(s.sec)&&s.cap<=RD.cap);
   if(RD.sort==='score') list.sort((a,b)=>rdScore(b,hs)-rdScore(a,hs));
   else if(RD.sort==='buzz') list.sort((a,b)=>b.bz-a.bz);
@@ -4463,252 +4822,153 @@ function tabRadar(){
   else if(RD.sort==='y')    list.sort((a,b)=>(b.y??-999)-(a.y??-999));
   else if(RD.sort==='cap')  list.sort((a,b)=>a.cap-b.cap);
 
-  const avgScore=list.length?Math.round(list.reduce((a,x)=>a+rdScore(x,hs),0)/list.length):0;
-  const avg1d=list.length?(list.reduce((a,x)=>a+x.d,0)/list.length):0;
-
   const GAINERS=[
-    {t:"NINE",n:"Nine Energy Service",sec:"Energy",pct:2360,p:4.20,cap:165,
-     lesson:"Factor ⑥ Rebote extremo: micro cap en mínimos históricos + short squeeze + oil recovery. Caída previa -95% = mayor rebote posible."},
-    {t:"BNAI",n:"Brand Engagement Network",sec:"AI",pct:1016,p:6.35,cap:180,
-     lesson:"Factor ④ Buzz social puro: 39 empleados, micro cap = flotante mínimo. Solo buzz Reddit/X. +1.016% YTD sin catalizador fundamental."},
-    {t:"ANL",n:"Adlai Nortye",sec:"Biotech",pct:709,p:18.40,cap:520,
-     lesson:"Factor ⑦+⑥: FDA PDUFA conocida meses antes + caída extrema previa. Patrón biotech más predecible del mercado."},
-    {t:"AAOI",n:"Applied Optoelectronics",sec:"Photonics",pct:628,p:138.0,cap:3040,
-     lesson:"Factores ②③④⑤ en enero: orden hyperscaler 1.6T + earnings beat + vol×10. AAOI a $9 en enero = +628% en 3 meses."},
-    {t:"QBTS",n:"D-Wave Quantum",sec:"Quantum",pct:458,p:14.43,cap:3200,
-     lesson:"Multi-catalizador en sector caliente: adquisición + bookings récord + rally sectorial. Factor ③ al máximo."},
+    {t:'NINE',n:'Nine Energy Service',sec:'Energy',pct:2360,cap:165,lesson:'Factor ⑥ Rebote extremo: micro cap en mínimos históricos + short squeeze + oil recovery. Caída previa -95% = mayor rebote posible.'},
+    {t:'BNAI',n:'Brand Engagement Network',sec:'AI',pct:1016,cap:180,lesson:'Factor ④ Buzz social puro: 39 empleados, micro cap = flotante mínimo. Solo buzz Reddit/X. +1.016% YTD sin catalizador fundamental.'},
+    {t:'ANL', n:'Adlai Nortye Ltd.',sec:'Biotech',pct:709,cap:520,lesson:'Factor ⑦+⑥: FDA PDUFA date conocida meses antes + caída extrema previa. Patrón biotech más predecible.'},
+    {t:'AAOI',n:'Applied Optoelectronics',sec:'Photonics',pct:628,cap:3040,lesson:'Factores ②③④⑤ en enero: orden hyperscaler 1.6T + earnings beat + vol×10. AAOI a $9 = +628% en 3 meses.'},
+    {t:'QBTS',n:'D-Wave Quantum',sec:'Quantum',pct:458,cap:3200,lesson:'Multi-catalizador en sector caliente: adquisición + bookings récord + rally sectorial. Factor ③ al máximo.'},
   ];
 
-  const FACTORS=[
-    {ico:"🚀",t:"① IPO/SPAC reciente · 22 pts",d:"Menos de 90 días. Flotante mínimo = explosiones con poco capital. Factor más potente. XNDU: +51% en 2 días."},
-    {ico:"⚡",t:"② Sector en momentum · 18 pts",d:"Sector en máximo buzz. Hype score ≥50 = activo. Se recalibra con los gainers reales de la semana."},
-    {ico:"🎯",t:"③ Multi-catalizador · 16 pts",d:"2+ catalizadores simultáneos. La combinación multiplica exponencialmente la probabilidad."},
-    {ico:"🔥",t:"④ Buzz social · 14 pts",d:"Menciones crecientes Reddit, Stocktwits, X. El buzz precede al precio 24-72h."},
-    {ico:"📊",t:"⑤ Volumen anómalo · 12 pts",d:"Volumen relativo >2× media 20 días. El volumen siempre precede al precio."},
-    {ico:"📉",t:"⑥ Rebote técnico · 10 pts",d:"Caída previa -30/50% con fundamentales intactos. Atrae técnicos y value simultáneamente."},
-    {ico:"📅",t:"⑦ Evento calendario · 5 pts",d:"FDA PDUFA, World X Day, earnings, conferencia. Predecible con semanas de antelación."},
-    {ico:"🏦",t:"⑧ Upgrade/Insider · 3 pts",d:"Upgrade JPMorgan/Goldman o insider buying Form 4. Alta fiabilidad pero menos frecuente."},
-  ];
-
-  return `
-  <div class="sec" style="animation:su .2s ease">
-
-  <!-- Toast -->
+  return `<div>${RD.chart?rdChartModal():''}
   ${RD.toast?`<div style="position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:var(--green);color:#fff;padding:10px 20px;border-radius:10px;font-weight:700;font-size:13px;z-index:900;box-shadow:0 4px 20px rgba(0,0,0,.4);white-space:nowrap">${RD.toast}</div>`:''}
 
-  <!-- Chart modal -->
-  ${RD.chart?rdChartModal():''}
-
   <!-- Sub-tabs -->
-  <div style="display:flex;background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:3px;margin-bottom:14px">
-    ${[['radar','⚡ Radar'],['gainers','📈 Las que más suben'],['playbook','📖 Playbook']].map(([id,l])=>
-      `<button class="${RD.subtab===id?'ba':'bo'}" onclick="RD.subtab='${id}';render()" style="flex:1;padding:8px 4px;font-size:11px;font-weight:700;border-radius:8px;border:none">${l}</button>`
-    ).join('')}
+  <div style="display:flex;background:var(--bg3);border:1px solid var(--border);border-radius:9px;padding:3px;margin-bottom:12px;gap:2px">
+    ${[['radar','⚡ Radar'],['gainers','📈 Las que más suben']].map(([id,l])=>`
+      <button class="${RD.subtab===id?'ba':'bo'}" onclick="RD.subtab='${id}';render()" style="flex:1;padding:7px 4px;font-size:11px;font-weight:700;border:none;border-radius:7px">${l}</button>`).join('')}
   </div>
 
-  <!-- ── RADAR SUB-TAB ── -->
   ${RD.subtab==='radar'?`
-    <!-- KPIs -->
-    <div class="g3" style="margin-bottom:14px">
-      <div class="card" style="text-align:center">
-        <div style="font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">Empresas</div>
-        <div style="font-size:20px;font-weight:800;font-family:monospace">${list.length}</div>
+  <!-- KPIs -->
+  <div class="g3" style="margin-bottom:12px">
+    <div class="card" style="text-align:center"><div class="kv">Empresas</div><div class="kn">${list.length}</div></div>
+    <div class="card" style="text-align:center"><div class="kv">Score medio</div><div class="kn" style="color:var(--accent)">${list.length?Math.round(list.reduce((a,x)=>a+rdScore(x,hs),0)/list.length):0}/100</div></div>
+    <div class="card" style="text-align:center"><div class="kv">Media 1D</div><div class="kn" style="color:${list.length&&list.reduce((a,x)=>a+x.d,0)/list.length>=0?'var(--green)':'var(--red)'}">${list.length?(list.reduce((a,x)=>a+x.d,0)/list.length>=0?'+':'')+((list.reduce((a,x)=>a+x.d,0)/list.length).toFixed(1))+'%':'—'}</div></div>
+  </div>
+  <!-- Filtros -->
+  <div class="card" style="margin-bottom:12px">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:8px">
+      <div>
+        <div class="lbl">Modo</div>
+        <div style="display:flex;background:var(--bg3);border:1px solid var(--border);border-radius:7px;overflow:hidden">
+          ${[['all','Todos'],['hype','🔥 Hype'],['sel','☑ Selec']].map(([m,l])=>`<button style="padding:6px 9px;border:none;background:${RD.hmode===m?(m==='hype'?'var(--gold)':'var(--accent)'):'transparent'};color:${RD.hmode===m?'#fff':'var(--text2)'};font-size:11px;font-weight:700;cursor:pointer" onclick="RD.hmode='${m}';if('${m}'==='all')RD.sels=new Set(RD_SECS.map(s=>s.id));if('${m}'==='hype'){const h2=rdHype();RD.sels=new Set(RD_SECS.filter(s=>(h2[s.id]||0)>=50).map(s=>s.id));}render()">${l}</button>`).join('')}
+        </div>
       </div>
-      <div class="card" style="text-align:center">
-        <div style="font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">Score medio</div>
-        <div style="font-size:20px;font-weight:800;color:var(--accent);font-family:monospace">${avgScore}<span style="font-size:11px">/100</span></div>
+      <div>
+        <div class="lbl">Ordenar</div>
+        <select onchange="RD.sort=this.value;render()" style="width:130px;font-size:11px">
+          <option value="score" ${RD.sort==='score'?'selected':''}>🎯 Prob. Explosión</option>
+          <option value="buzz"  ${RD.sort==='buzz'?'selected':''}>Buzz Social</option>
+          <option value="d"     ${RD.sort==='d'?'selected':''}>Mejor 1D</option>
+          <option value="m"     ${RD.sort==='m'?'selected':''}>Mejor 1M</option>
+          <option value="y"     ${RD.sort==='y'?'selected':''}>Mejor 12M</option>
+          <option value="cap"   ${RD.sort==='cap'?'selected':''}>Menor Cap</option>
+        </select>
       </div>
-      <div class="card" style="text-align:center">
-        <div style="font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">Media 1D</div>
-        <div style="font-size:20px;font-weight:800;color:${avg1d>=0?'var(--green)':'var(--red)'};font-family:monospace">${avg1d>=0?'+':''}${avg1d.toFixed(1)}%</div>
+      <div>
+        <div class="lbl">Cap máx</div>
+        <select onchange="RD.cap=+this.value;render()" style="width:85px;font-size:11px">
+          <option value="500"  ${RD.cap===500?'selected':''}>$500M</option>
+          <option value="1000" ${RD.cap===1000?'selected':''}>$1B</option>
+          <option value="2000" ${RD.cap===2000?'selected':''}>$2B</option>
+          <option value="5000" ${RD.cap===5000?'selected':''}>$5B</option>
+        </select>
       </div>
     </div>
-
-    <!-- Filters -->
-    <div class="card" style="margin-bottom:12px">
-      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px">
-        <div>
-          <div style="font-size:10px;color:var(--text2);font-weight:700;margin-bottom:4px;text-transform:uppercase">Modo</div>
-          <div style="display:flex;background:var(--bg3);border:1px solid var(--border);border-radius:8px;overflow:hidden">
-            ${[['all','Todos'],['hype','🔥 Hype'],['sel','☑ Selec']].map(([m,l])=>
-              `<button style="padding:6px 10px;border:none;background:${RD.hmode===m?(m==='hype'?'var(--gold)':'var(--accent)'):'transparent'};color:${RD.hmode===m?'#fff':'var(--text2)'};font-size:11px;font-weight:700;cursor:pointer" onclick="
-                RD.hmode='${m}';
-                if('${m}'==='all')RD.sels=new Set(RD_SECS.map(s=>s.id));
-                if('${m}'==='hype'){const hs2=rdHype();RD.sels=new Set(RD_SECS.filter(s=>(hs2[s.id]||0)>=50).map(s=>s.id));}
-                render();">${l}</button>`
-            ).join('')}
-          </div>
-        </div>
-        <div>
-          <div style="font-size:10px;color:var(--text2);font-weight:700;margin-bottom:4px;text-transform:uppercase">Ordenar</div>
-          <select onchange="RD.sort=this.value;render()" style="width:130px;padding:6px 8px;font-size:11px">
-            <option value="score" ${RD.sort==='score'?'selected':''}>🎯 Prob. Explosión</option>
-            <option value="buzz"  ${RD.sort==='buzz'?'selected':''}>Buzz Social</option>
-            <option value="d"     ${RD.sort==='d'?'selected':''}>Mejor 1D</option>
-            <option value="m"     ${RD.sort==='m'?'selected':''}>Mejor 1M</option>
-            <option value="y"     ${RD.sort==='y'?'selected':''}>Mejor 12M</option>
-            <option value="cap"   ${RD.sort==='cap'?'selected':''}>Menor Cap</option>
-          </select>
-        </div>
-        <div>
-          <div style="font-size:10px;color:var(--text2);font-weight:700;margin-bottom:4px;text-transform:uppercase">Cap máx</div>
-          <select onchange="RD.cap=+this.value;render()" style="width:90px;padding:6px 8px;font-size:11px">
-            <option value="500"   ${RD.cap===500?'selected':''}>$500M</option>
-            <option value="1000"  ${RD.cap===1000?'selected':''}>$1B</option>
-            <option value="2000"  ${RD.cap===2000?'selected':''}>$2B</option>
-            <option value="5000"  ${RD.cap===5000?'selected':''}>$5B</option>
-          </select>
+    ${RD.hmode==='sel'?`
+    <div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <div class="lbl" style="margin:0">Sectores</div>
+        <div style="display:flex;gap:5px">
+          <button class="bo" onclick="RD.sels=new Set(RD_SECS.map(s=>s.id));render()" style="font-size:10px;padding:3px 7px">Todos</button>
+          <button class="bo" onclick="RD.sels=new Set();render()" style="font-size:10px;padding:3px 7px">Ninguno</button>
+          <button class="bo" onclick="{const h3=rdHype();RD.sels=new Set(RD_SECS.filter(s=>(h3[s.id]||0)>=50).map(s=>s.id));render()}" style="font-size:10px;padding:3px 7px">🔥 Hype</button>
         </div>
       </div>
-      <!-- Sector chips (visible en modo sel) -->
-      ${RD.hmode==='sel'?`
+      <div style="display:flex;flex-wrap:wrap;gap:5px">
+        ${RD_SECS.map(s=>{const on=RD.sels.has(s.id);const isH=(rdHype()[s.id]||0)>=50;return `<div onclick="if(RD.sels.has('${s.id}'))RD.sels.delete('${s.id}');else RD.sels.add('${s.id}');render()" style="display:flex;align-items:center;gap:4px;padding:4px 9px;border-radius:6px;border:1px solid ${on?(isH?'var(--gold)':'var(--accent)'):'var(--border)'};background:${on?(isH?'rgba(210,138,63,.15)':'rgba(192,60,59,.12)'):'var(--bg3)'};cursor:pointer;user-select:none"><div style="width:11px;height:11px;border-radius:2px;border:1px solid ${on?(isH?'var(--gold)':'var(--accent)'):'var(--border)'};background:${on?(isH?'var(--gold)':'var(--accent)'):'transparent'};display:flex;align-items:center;justify-content:center;font-size:8px;color:#fff">${on?'✓':''}</div><span style="font-size:10px;font-weight:600;color:${on?'var(--text)':'var(--text2)'}">${s.ico} ${s.lbl}</span>${isH?'<span style="width:5px;height:5px;border-radius:50%;background:var(--gold)"></span>':''}</div>`;}).join('')}
+      </div>
+    </div>`:''}
+  </div>
+  <!-- Stock cards -->
+  ${!list.length?`<div class="card" style="text-align:center;color:var(--text2);padding:30px">Ninguna empresa con estos filtros</div>`:''}
+  ${list.map((s,i)=>{
+    const sc=rdScore(s,hs),el=rdLabel(sc),up=s.d>=0,isAdded=RD.added.has(s.t);
+    return `<div class="card" style="margin-bottom:10px;border-left:3px solid ${el.c}">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:7px">
         <div>
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:7px">
-            <div style="font-size:10px;color:var(--text2);text-transform:uppercase;font-weight:700">Sectores</div>
-            <div style="display:flex;gap:5px">
-              <button class="bo" onclick="RD.sels=new Set(RD_SECS.map(s=>s.id));render()" style="font-size:10px;padding:3px 8px">Todos</button>
-              <button class="bo" onclick="RD.sels=new Set();render()" style="font-size:10px;padding:3px 8px">Ninguno</button>
-              <button class="bo" onclick="{const hs3=rdHype();RD.sels=new Set(RD_SECS.filter(s=>(hs3[s.id]||0)>=50).map(s=>s.id));render()}" style="font-size:10px;padding:3px 8px">🔥 Hype</button>
-            </div>
+          <div style="font-size:16px;font-weight:800;color:var(--accent);font-family:monospace">${s.ico} ${s.t}</div>
+          <div style="font-size:10px;color:var(--text2)">${s.n}</div>
+          <div style="display:flex;gap:4px;margin-top:4px;flex-wrap:wrap">
+            <span class="byy" style="font-size:10px">${s.sec}</span>
+            <span style="font-size:10px;padding:1px 6px;border-radius:10px;background:rgba(128,128,128,.1);color:${el.c};border:1px solid ${el.c}44">${el.t}</span>
+            ${(hs[s.sec]||0)>=50?`<span class="byy" style="font-size:10px">🔥${hs[s.sec]}</span>`:''}
           </div>
-          <div style="display:flex;flex-wrap:wrap;gap:5px">
-            ${RD_SECS.map(s=>{
-              const on=RD.sels.has(s.id);
-              const isHype=(hs[s.id]||0)>=50;
-              return `<div onclick="if(RD.sels.has('${s.id}'))RD.sels.delete('${s.id}');else RD.sels.add('${s.id}');render()"
-                style="display:flex;align-items:center;gap:4px;padding:4px 9px;border-radius:6px;border:1px solid ${on?(isHype?'var(--gold)':'var(--accent)'):'var(--border)'};background:${on?(isHype?'rgba(210,138,63,.15)':'rgba(192,60,59,.12)'):'var(--bg3)'};cursor:pointer;user-select:none">
-                <div style="width:12px;height:12px;border-radius:2px;border:1px solid ${on?(isHype?'var(--gold)':'var(--accent)'):'var(--border)'};background:${on?(isHype?'var(--gold)':'var(--accent)'):'transparent'};display:flex;align-items:center;justify-content:center;font-size:8px;color:#fff;flex-shrink:0">${on?'✓':''}</div>
-                <span style="font-size:10px;font-weight:600;color:${on?'var(--text)':'var(--text2)'}">${s.ico} ${s.lbl}</span>
-                ${isHype?'<span style="width:5px;height:5px;border-radius:50%;background:var(--gold);flex-shrink:0"></span>':''}
-              </div>`;
-            }).join('')}
-          </div>
-        </div>`:''}
-    </div>
+        </div>
+        <div style="text-align:right;flex-shrink:0">
+          <div style="font-size:9px;color:var(--text2)">#${i+1}</div>
+          <div style="font-size:18px;font-weight:800;color:${up?'var(--green)':'var(--red)'};font-family:monospace">${rdPct(s.d)}</div>
+          <div style="font-size:13px;font-weight:700;font-family:monospace">$${s.p.toFixed(2)}</div>
+          <div style="font-size:9px;color:var(--text2)">${s.ex} · ${rdCap(s.cap)}</div>
+        </div>
+      </div>
+      <!-- Perf row clickable -->
+      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:3px;margin-bottom:9px">
+        ${[['1D',s.d,'d'],['1S',s.w,'w'],['1M',s.m,'m'],['3M',s.q,'q'],['12M',s.y,'y']].map(([l,v,k])=>`
+          <div onclick="RD.chart=RD_STOCKS.find(x=>x.t==='${s.t}');RD.crange='${k}';render()" style="text-align:center;background:var(--bg3);border-radius:7px;padding:5px 1px;cursor:pointer;border:1px solid var(--border)">
+            <div style="font-size:8px;color:var(--text2);margin-bottom:1px">${l}</div>
+            <div style="font-size:10px;font-weight:700;color:${rdCol(v)};font-family:monospace">${rdPct(v)}</div>
+          </div>`).join('')}
+      </div>
+      <!-- Score bar -->
+      <div style="background:var(--bg3);border-radius:9px;padding:8px 10px;margin-bottom:8px">
+        <div style="display:flex;justify-content:space-between;margin-bottom:3px">
+          <span style="font-size:9px;color:var(--text2);text-transform:uppercase;letter-spacing:.03em">Score playbook</span>
+          <span style="font-size:11px;font-weight:800;color:${el.c};font-family:monospace">${sc}/100</span>
+        </div>
+        <div style="height:4px;background:var(--border);border-radius:2px;overflow:hidden;margin-bottom:5px">
+          <div style="height:100%;width:${sc}%;background:${el.c};border-radius:2px"></div>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:2px">
+          ${Object.keys(RDW).map(k=>{const active=k==='sec'?(hs[s.sec]||0)>=50:s.F[k];return `<span style="font-size:8px;padding:1px 4px;border-radius:2px;background:${active?'rgba(76,175,125,.1)':'var(--bg3)'};color:${active?'var(--green)':'var(--text2)'};border:1px solid ${active?'rgba(76,175,125,.25)':'var(--border)'};text-decoration:${active?'none':'line-through'};opacity:${active?1:.4};font-family:monospace">${RDFL[k]}</span>`;}).join('')}
+        </div>
+      </div>
+      <!-- Catalizador -->
+      <div style="border-top:1px solid var(--border);padding-top:7px;margin-bottom:8px">
+        <div style="font-size:9px;color:var(--text2);text-transform:uppercase;letter-spacing:.03em;margin-bottom:3px">📡 Catalizador</div>
+        <div style="font-size:11px;line-height:1.5">${s.txt}</div>
+        <div style="display:flex;flex-wrap:wrap;gap:3px;margin-top:4px">${s.tags.map(tg=>`<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:rgba(76,175,125,.1);color:var(--green);border:1px solid rgba(76,175,125,.2)">${tg}</span>`).join('')}</div>
+      </div>
+      <!-- Actions -->
+      <div style="display:flex;gap:8px">
+        <button class="bo" onclick="RD.chart=RD_STOCKS.find(x=>x.t==='${s.t}');RD.crange='m';render()" style="flex:1;padding:8px 0;font-size:12px">📊 Gráfico</button>
+        <button class="${isAdded?'bs':'ba'}" onclick="rdAddToInversiones('${s.t}')" style="flex:2;padding:8px 0;font-size:12px;font-weight:600" ${isAdded?'disabled':''}>
+          ${isAdded?'✓ En Inversiones':'+ Añadir a Inversiones'}
+        </button>
+      </div>
+    </div>`;
+  }).join('')}`:''}
 
-    <!-- Legend -->
-    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;align-items:center">
-      <span style="font-size:9px;color:var(--text2)">Score:</span>
-      ${[['var(--red)','80+ Explosivo'],['var(--yellow)','65+ Muy alto'],['var(--gold)','50+ Alto'],['var(--blue)','35+ Moderado'],['var(--text2)','<35 Bajo']].map(([c,l])=>
-        `<span style="font-size:9px;padding:2px 7px;border-radius:3px;background:rgba(128,128,128,.1);color:${c};border:1px solid ${c}55;font-family:monospace">${l}</span>`
-      ).join('')}
-    </div>
-
-    <!-- Stock cards -->
-    ${!list.length?`<div class="card" style="text-align:center;color:var(--text2);padding:32px">Ninguna empresa con estos filtros</div>`:''}
-    ${list.map((s,i)=>{
-      const sc=rdScore(s,hs),el=rdLabel(sc),up=s.d>=0,isAdded=RD.added.has(s.t);
-      return `
-      <div class="card" style="margin-bottom:10px;border-left:3px solid ${el.c}">
-        <!-- Header -->
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
-          <div>
-            <div style="font-size:17px;font-weight:800;color:var(--accent);font-family:monospace;line-height:1">${s.ico} ${s.t}</div>
-            <div style="font-size:10px;color:var(--text2);margin-top:1px">${s.n}</div>
-            <div style="display:flex;gap:4px;margin-top:5px;flex-wrap:wrap">
-              <span class="badge" style="background:rgba(210,138,63,.15);color:var(--gold)">${s.sec}</span>
-              <span class="badge" style="background:rgba(128,128,128,.1);color:${el.c};border:1px solid ${el.c}44">${el.t}</span>
-              ${(hs[s.sec]||0)>=50?`<span class="badge" style="background:rgba(210,138,63,.12);color:var(--gold)">🔥${hs[s.sec]}</span>`:''}
-            </div>
-          </div>
-          <div style="text-align:right;flex-shrink:0">
-            <div style="font-size:9px;color:var(--text2)">#${i+1}</div>
-            <div style="font-size:19px;font-weight:800;color:${up?'var(--green)':'var(--red)'};font-family:monospace">${rdPct(s.d)}</div>
-            <div style="font-size:14px;font-weight:700;font-family:monospace">$${s.p.toFixed(2)}</div>
-            <div style="font-size:9px;color:var(--text2)">${s.ex} · ${rdCap(s.cap)}</div>
-          </div>
-        </div>
-        <!-- Perf row - clickable -->
-        <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:3px;margin-bottom:10px">
-          ${[['1D',s.d,'d'],['1S',s.w,'w'],['1M',s.m,'m'],['3M',s.q,'q'],['12M',s.y,'y']].map(([l,v,k])=>`
-            <div onclick="rdOpenChart('${s.t}','${k}')" style="text-align:center;background:var(--bg3);border-radius:7px;padding:5px 1px;cursor:pointer;border:1px solid var(--border)">
-              <div style="font-size:8px;color:var(--text2);margin-bottom:1px">${l}</div>
-              <div style="font-size:10px;font-weight:700;color:${rdCol(v)};font-family:monospace">${rdPct(v)}</div>
-            </div>`).join('')}
-        </div>
-        <!-- Score bar -->
-        <div style="background:var(--bg3);border-radius:9px;padding:9px 11px;margin-bottom:9px">
-          <div style="display:flex;justify-content:space-between;margin-bottom:4px">
-            <span style="font-size:9px;color:var(--text2);text-transform:uppercase;letter-spacing:.04em">Prob. explosión · Score playbook</span>
-            <span style="font-size:12px;font-weight:800;color:${el.c};font-family:monospace">${sc}/100</span>
-          </div>
-          <div style="height:4px;background:var(--border);border-radius:2px;overflow:hidden;margin-bottom:6px">
-            <div style="height:100%;width:${sc}%;background:${el.c};border-radius:2px"></div>
-          </div>
-          <div style="display:flex;flex-wrap:wrap;gap:2px">
-            ${Object.keys(RDW).map(k=>{
-              const active=k==='sec'?(hs[s.sec]||0)>=50:s.F[k];
-              return `<span style="font-size:8px;padding:1px 4px;border-radius:2px;background:${active?'rgba(76,175,125,.1)':'var(--bg3)'};color:${active?'var(--green)':'var(--text2)'};border:1px solid ${active?'rgba(76,175,125,.25)':'var(--border)'};text-decoration:${active?'none':'line-through'};opacity:${active?1:.4};font-family:monospace">${RDFL[k]}</span>`;
-            }).join('')}
-          </div>
-        </div>
-        <!-- Catalizador -->
-        <div style="border-top:1px solid var(--border);padding-top:8px;margin-bottom:9px">
-          <div style="font-size:9px;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px">📡 Catalizador</div>
-          <div style="font-size:11px;line-height:1.55">${s.txt}</div>
-          <div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:5px">
-            ${s.tags.map(tg=>`<span style="font-size:9px;padding:1px 6px;border-radius:3px;background:rgba(76,175,125,.1);color:var(--green);border:1px solid rgba(76,175,125,.2)">${tg}</span>`).join('')}
-          </div>
-        </div>
-        <!-- Actions -->
-        <div style="display:flex;gap:8px">
-          <button class="bo" onclick="rdOpenChart('${s.t}','m')" style="flex:1;padding:8px 0;font-size:12px">📊 Gráfico</button>
-          <button class="${isAdded?'bs':'ba'}" onclick="rdAddToInversiones('${s.t}')" style="flex:2;padding:8px 0;font-size:12px;font-weight:600" ${isAdded?'disabled':''}>
-            ${isAdded?'✓ En Inversiones':'+ Añadir a Inversiones'}
-          </button>
-        </div>
-      </div>`;
-    }).join('')}
-  `:''}
-
-  <!-- ── GAINERS SUB-TAB ── -->
   ${RD.subtab==='gainers'?`
-    <div class="card" style="margin-bottom:14px;border-left:3px solid var(--gold)">
-      <div style="font-size:12px;font-weight:700;color:var(--gold);margin-bottom:4px">🏆 Laboratorio de Patrones · YTD 2026</div>
-      <div style="font-size:11px;color:var(--text2);line-height:1.6">Analiza qué patrón activó cada explosión. Compara con los 8 factores del Playbook para calibrar el scoring del Radar.</div>
-    </div>
-    ${GAINERS.map((g,i)=>{
-      const rs=RD_STOCKS.find(x=>x.t===g.t);
-      return `
-      <div class="card" style="margin-bottom:10px;border-left:3px solid var(--gold);cursor:${rs?'pointer':'default'}" ${rs?`onclick="rdOpenChart('${g.t}','m')"`:''}>
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
-          <div>
-            <div style="font-size:16px;font-weight:800;color:var(--gold);font-family:monospace">#${i+1} ${g.t}</div>
-            <div style="font-size:10px;color:var(--text2)">${g.n} · ${g.sec} · ${rdCap(g.cap)}</div>
-          </div>
-          <div style="font-size:22px;font-weight:800;color:var(--green);font-family:monospace">+${g.pct>=1000?(g.pct/1000).toFixed(1)+'k':g.pct}%</div>
-        </div>
-        <div style="font-size:11px;color:var(--text);line-height:1.55">${g.lesson}</div>
-        ${rs?`<div style="font-size:9px;color:var(--accent);margin-top:6px;opacity:.7">📊 Toca para ver gráfico →</div>`:''}
-      </div>`;
-    }).join('')}
-  `:''}
-
-  <!-- ── PLAYBOOK SUB-TAB ── -->
-  ${RD.subtab==='playbook'?`
-    <div class="card" style="margin-bottom:12px;border-left:3px solid var(--accent)">
-      <div style="font-size:12px;font-weight:700;color:var(--accent);margin-bottom:5px">📖 Momentum Playbook · 8 Factores</div>
-      <div style="font-size:11px;color:var(--text2);line-height:1.6">Cada empresa recibe puntos según cuántos factores tiene activos. A más factores convergentes, mayor probabilidad de explosión de precio.</div>
-    </div>
-    ${FACTORS.map(fa=>`
-      <div class="card" style="margin-bottom:8px">
-        <div style="font-size:13px;font-weight:700;margin-bottom:4px">${fa.ico} ${fa.t}</div>
-        <div style="font-size:11px;color:var(--text2);line-height:1.55">${fa.d}</div>
-      </div>`).join('')}
-    <div class="card" style="border-left:3px solid var(--red);margin-top:8px">
-      <div style="font-size:12px;font-weight:700;color:var(--red);margin-bottom:8px">⚠ Gestión de riesgo</div>
-      ${[['Posición máxima','1-3% del portfolio'],['Stop loss','10-15% hard — innegociable'],['Toma parcial','+25% vende 1/3 · +50% vende 1/3 · trailing el resto'],['Horizonte','1-10 días · Si no se mueve, catalizador falló'],['Perfiles válidos','Solo dinámico / agresivo']].map(([l,v])=>`
-        <div style="display:flex;justify-content:space-between;border-bottom:1px solid var(--border);padding:6px 0;font-size:11px">
-          <span style="color:var(--text2)">${l}</span>
-          <span style="font-weight:700;color:var(--text);text-align:right;max-width:60%">${v}</span>
-        </div>`).join('')}
-      <div style="font-size:9px;color:var(--text2);margin-top:8px;line-height:1.6">⚠ No constituye recomendación de inversión. Datos a 15 Abr 2026. Renta 4 Banco S.A.</div>
-    </div>
-  `:''}
-
+  <div class="card" style="margin-bottom:12px;border-left:3px solid var(--gold)">
+    <div style="font-weight:700;font-size:13px;color:var(--gold);margin-bottom:4px">🏆 Laboratorio de Patrones · YTD 2026</div>
+    <div style="font-size:11px;color:var(--text2);line-height:1.6">Analiza qué patrón activó cada explosión. Compara con los 8 factores del Playbook.</div>
+  </div>
+  ${GAINERS.map((g,i)=>{
+    const rs=RD_STOCKS.find(x=>x.t===g.t);
+    return `<div class="card" style="margin-bottom:9px;border-left:3px solid var(--gold);cursor:${rs?'pointer':'default'}" ${rs?`onclick="RD.chart=RD_STOCKS.find(x=>x.t==='${g.t}');RD.crange='m';render()"`:''}>
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:5px">
+        <div><div style="font-size:15px;font-weight:800;color:var(--gold);font-family:monospace">#${i+1} ${g.t}</div>
+        <div style="font-size:10px;color:var(--text2)">${g.n} · ${g.sec} · ${rdCap(g.cap)}</div></div>
+        <div style="font-size:20px;font-weight:800;color:var(--green);font-family:monospace">+${g.pct>=1000?(g.pct/1000).toFixed(1)+'k':g.pct}%</div>
+      </div>
+      <div style="font-size:11px;color:var(--text);line-height:1.5">${g.lesson}</div>
+      ${rs?`<div style="font-size:9px;color:var(--accent);margin-top:5px;opacity:.7">📊 Toca para ver gráfico →</div>`:''}
+    </div>`;
+  }).join('')}`:''}
   </div>`;
 }
-
 
 // ─── INIT ─────────────────────────────────────────────────────────────────────
 if(!LS.users().find(u=>u.id===DEMO.id)){const users=LS.users();users.unshift(DEMO);LS.saveUsers(users);}
