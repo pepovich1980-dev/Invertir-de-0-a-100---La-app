@@ -2849,45 +2849,61 @@ async function mktFetchOne(sym,fallbackName){
   const enc=encodeURIComponent(sym);
   let r=null;
 
-  // Try 0: Own Vercel proxy (best — no CORS, fast)
-  // Deploy api/prices.js to your Vercel project to enable this
-  if(!r){try{const d=await tryFetch(`https://build-eight-neon.vercel.app/api/prices?sym=${enc}`,5000);if(d?.price>0)r={price:d.price,pct:d.pct,currency:d.currency||'',name:d.name||fallbackName||sym};}catch(e){}}
+  // Approach A: Yahoo Finance with crumb (best, works when cookies present)
+  if(!r && window._yfCrumb){
+    try{
+      const d=await tryFetch(`https://query1.finance.yahoo.com/v8/finance/chart/${enc}?interval=1d&range=5d&crumb=${encodeURIComponent(window._yfCrumb)}`,5000);
+      r=parseYahooMeta(d);
+    }catch(e){}
+  }
 
-  // Try 1: Yahoo Finance query1 direct (simple GET, no preflight, often works)
-  if(!r){try{r=parseYahooMeta(await tryFetch(`https://query1.finance.yahoo.com/v8/finance/chart/${enc}?interval=1d&range=5d`,5000));}catch(e){}}
+  // Approach B: Yahoo direct (works on many networks/browsers)
+  if(!r){
+    try{
+      const d=await tryFetch(`https://query1.finance.yahoo.com/v8/finance/chart/${enc}?interval=1d&range=5d`,5000);
+      r=parseYahooMeta(d);
+      if(r) console.log('✅ Yahoo direct:', sym, r.price);
+    }catch(e){}
+  }
+  if(!r){
+    try{
+      const d=await tryFetch(`https://query2.finance.yahoo.com/v8/finance/chart/${enc}?interval=1d&range=5d`,5000);
+      r=parseYahooMeta(d);
+      if(r) console.log('✅ Yahoo q2:', sym, r.price);
+    }catch(e){}
+  }
 
-  // Try 2: Yahoo Finance query2 direct
-  if(!r){try{r=parseYahooMeta(await tryFetch(`https://query2.finance.yahoo.com/v8/finance/chart/${enc}?interval=1d&range=5d`,5000));}catch(e){}}
-
-  // Try 3: allorigins proxy (wraps any URL, handles CORS)
+  // Approach C: allorigins.win proxy
   if(!r){
     try{
       const url=`https://query1.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&range=5d`;
-      const w=await tryFetch(`https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,9000);
+      const w=await tryFetch(`https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,10000);
       if(w?.contents){
         const txt=typeof w.contents==='string'?w.contents:JSON.stringify(w.contents);
-        if(txt&&txt[0]==='{'){r=parseYahooMeta(JSON.parse(txt));}
+        if(txt&&txt[0]==='{'){r=parseYahooMeta(JSON.parse(txt));if(r)console.log('✅ allorigins:',sym,r.price);}
       }
     }catch(e){}
   }
 
-  // Try 4: corsproxy.io
+  // Approach D: corsproxy.io
   if(!r){
     try{
       const url=`https://query1.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&range=5d`;
-      r=parseYahooMeta(await tryFetch(`https://corsproxy.io/?${encodeURIComponent(url)}`,9000));
+      const d=await tryFetch(`https://corsproxy.io/?${encodeURIComponent(url)}`,10000);
+      r=parseYahooMeta(d);
+      if(r) console.log('✅ corsproxy:',sym,r.price);
     }catch(e){}
   }
 
-  // Try 5: thingproxy
-  if(!r){
+  // Approach E: Own Vercel proxy (if user has deployed api/prices.js)
+  if(!r && PRICE_PROXY){
     try{
-      const url=`https://query1.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&range=5d`;
-      r=parseYahooMeta(await tryFetch(`https://thingproxy.freeboard.io/fetch/${url}`,9000));
+      const d=await tryFetch(`${PRICE_PROXY}?sym=${enc}`,6000);
+      if(d?.price>0){r={price:d.price,pct:d.pct,currency:d.currency||'',name:d.name||fallbackName||sym};console.log('✅ Vercel proxy:',sym,r.price);}
     }catch(e){}
   }
 
-  // API 5: CoinGecko for crypto (no CORS issues)
+  // Approach F: CoinGecko for crypto (always works, no CORS)
   if(!r){
     const cmap={'BTC-EUR':'bitcoin','ETH-EUR':'ethereum','BTC-USD':'bitcoin','ETH-USD':'ethereum',
       'BNB-EUR':'binancecoin','SOL-EUR':'solana','XRP-EUR':'ripple','ADA-EUR':'cardano'};
@@ -2896,15 +2912,15 @@ async function mktFetchOne(sym,fallbackName){
       const vs=sym.toUpperCase().includes('USD')?'usd':'eur';
       try{
         const cg=await tryFetch(`https://api.coingecko.com/api/v3/simple/price?ids=${cgId}&vs_currencies=${vs}&include_24hr_change=true`,6000);
-        if(cg?.[cgId]?.[vs]>0) r={price:cg[cgId][vs],pct:cg[cgId][`${vs}_24h_change`]??null,currency:vs.toUpperCase(),name:fallbackName||sym};
+        if(cg?.[cgId]?.[vs]>0){r={price:cg[cgId][vs],pct:cg[cgId][`${vs}_24h_change`]??null,currency:vs.toUpperCase(),name:fallbackName||sym};console.log('✅ CoinGecko:',sym,r.price);}
       }catch(e){}
     }
   }
 
+  if(!r) console.warn('❌ No price for',sym);
+
   if(r&&r.price>0)
     MKT_CACHE[sym]={price:r.price,pct:r.pct??null,name:r.name||fallbackName||sym,currency:r.currency||'',ts:Date.now()};
-  else
-    MKT_CACHE[sym]={price:null,pct:null,name:fallbackName||sym,currency:'',ts:Date.now()-240000}; // retry in 1min
   MKT_LOADING.delete(sym);
 }
 
@@ -2915,476 +2931,998 @@ async function fetchLivePrice(ticker){
   return(d&&d.price>0)?{price:d.price,currency:d.currency,name:d.name,source:'cache'}:null;
 }
 
-function renderSearchResults(results){
-  const sr=document.getElementById('sr');
-  if(!sr)return;
-  if(!results||!results.length){
-    sr.innerHTML='<div style="padding:10px;font-size:12px;color:var(--text2)">Sin resultados. Prueba con el ticker exacto (MSFT, AAPL, ITX.MC) o palabras como <i>sp500</i>, <i>ibex</i>, <i>msci world</i>.</div>';
-    return;
-  }
-  window._searchResults=results;
-  sr.innerHTML='<div style="background:var(--bg3);border:1px solid var(--border);border-radius:9px;overflow:hidden;margin-top:6px">'
-    +results.map((r,i)=>{
-      const nombre=r.n||r.nombre||'';
-      const ticker=r.t||r.ticker||'';
-      const tipo=r.tp||r.tipo||'';
-      const precio=r.p||r.precioActual||0;
-      const curr=r.currency||'';
-      const isLive=!!r._live;
-      return `<div style="padding:9px 12px;cursor:pointer;border-bottom:${i<results.length-1?'1px solid rgba(46,50,72,.5)':'none'};transition:background .12s"
-        onmouseover="this.style.background='rgba(108,99,255,.12)'" onmouseout="this.style.background=''"
-        onclick="fillInv(${i})">
-        <div style="display:flex;align-items:center;gap:8px">
-          <div style="flex:1;min-width:0">
-            <span style="font-weight:700;font-size:13px">${escH(nombre)}</span>
-            <span style="color:var(--accent);font-size:11px;margin-left:6px;font-weight:600">${escH(ticker)}</span>
-          </div>
-          <span class="badge bbb" style="white-space:nowrap">${escH(tipo)}</span>
-          ${precio>0?`<span style="font-weight:700;font-size:13px;color:var(--green);white-space:nowrap">${f2(precio)}${curr?' '+curr:' €'}${isLive?' <span style="font-size:9px">●</span>':''}</span>`:''}
-        </div>
-        <div style="font-size:11px;color:var(--text2);margin-top:2px">${escH(r.d||r.descripcion||'')}</div>
-      </div>`;
-    }).join('')+'</div>';
-}
 
-let _searchTimer=null;
-function liveSearch(v){
-  clearTimeout(_searchTimer);
-  if(!v||v.trim().length<2)return;
-  _searchTimer=setTimeout(()=>{
-    const res=searchLocal(v.trim());
-    if(res.length) renderSearchResults(res);
-  },160);
-}
-
-async function searchAssets(){
-  const q=document.getElementById('iq')?.value.trim();
-  if(!q)return;
-  const sr=document.getElementById('sr');
-  if(sr)sr.innerHTML='<div style="font-size:12px;color:var(--text2);padding:8px">🔍 Buscando...</div>';
-
-  // Instant local results first
-  const local=searchLocal(q);
-  if(local.length) renderSearchResults(local);
-
-  // Try Yahoo Finance autocomplete
-  let yahooSymbols=[];
-  try{
-    const r=await Promise.race([
-      fetch(`https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(q)}&quotesCount=5&newsCount=0&enableFuzzyQuery=true`,{mode:'cors'}),
-      new Promise((_,rej)=>setTimeout(()=>rej('timeout'),4000))
-    ]);
-    if(r.ok){
-      const data=await r.json();
-      const tMap={EQUITY:'Acción',ETF:'ETF',MUTUALFUND:'Fondo',CRYPTOCURRENCY:'Cripto',BOND:'Bono'};
-      yahooSymbols=(data.quotes||[])
-        .filter(x=>x.symbol&&(x.longname||x.shortname))
-        .slice(0,5)
-        .map(x=>({
-          n:x.longname||x.shortname||x.symbol,
-          t:x.symbol, tp:tMap[x.quoteType]||'Otro',
-          p:0, currency:'',
-          d:`${x.exchange||''} · ${x.typeDisp||x.quoteType||''}`.replace(/^ · | · $/,''),
-          _live:false
-        }));
-    }
-  }catch(e){/* CORS blocked — local only */}
-
-  if(yahooSymbols.length){
-    if(sr)sr.innerHTML='<div style="font-size:12px;color:var(--text2);padding:8px">⚡ Obteniendo precios reales...</div>';
-    // Fetch live prices in parallel
-    const prices=await Promise.allSettled(yahooSymbols.map(s=>fetchLivePrice(s.t)));
-    yahooSymbols=yahooSymbols.map((s,i)=>{
-      const live=prices[i].status==='fulfilled'?prices[i].value:null;
-      if(live&&live.price>0){
-        s.p=live.price; s.currency=live.currency;
-        if(live.name&&live.name.length>3) s.n=live.name;
-        s.d=`${live.exchange}${live.currency?' · '+live.currency:''}`.replace(/^ · /,'');
-        s._live=true;
+// Refresh prices inside the consolidation modal
+async function csRefreshPrices(){
+  const u=S.user;
+  const invs=(u.inv||[]).filter(i=>i.abierta!==false);
+  const cotizados=invs.filter(i=>i.ticker&&i.ticker!=='N/A'&&normClass(i.tipo)!=='Inmueble'&&normClass(i.tipo)!=='Private Equity');
+  const btn=document.getElementById('cs-refresh-btn');
+  if(btn){btn.innerHTML='⏳ Actualizando...';btn.disabled=true;}
+  let updated=0;
+  const chunks=[];
+  for(let i=0;i<cotizados.length;i+=4) chunks.push(cotizados.slice(i,i+4));
+  for(const chunk of chunks){
+    const results=await Promise.allSettled(chunk.map(inv=>fetchLivePrice(inv.ticker)));
+    results.forEach((res,ii)=>{
+      const inv=chunk[ii];
+      if(res.status==='fulfilled'&&res.value?.price>0){
+        const el=document.getElementById(`cs-p-${inv.id}`);
+        if(el){el.value=Math.round(res.value.price*100)/100;el.style.borderColor='var(--green)';}
+        updated++;
       }
-      return s;
     });
-    const seen=new Set(yahooSymbols.map(r=>r.t.toLowerCase()));
-    renderSearchResults([...yahooSymbols,...local.filter(r=>!seen.has(r.t.toLowerCase()))].slice(0,7));
   }
+  csUpdateTotal();
+  if(btn){btn.innerHTML=`✓ ${updated} precios actualizados`;btn.style.color='var(--green)';}
 }
 
-function fillInv(idx){
-  try{
-    const r=(window._searchResults||[])[idx];
-    if(!r)return;
-    const nombre=r.n||r.nombre||'';
-    const ticker=r.t||r.ticker||'';
-    const tipo=r.tp||r.tipo||'ETF';
-    const precio=r.p||r.precioActual||0;
-    const g=id=>{const el=document.getElementById(id);return el;};
-    if(g('in'))g('in').value=nombre;
-    if(g('it'))g('it').value=ticker;
-    if(g('ipc'))g('ipc').value=precio;
-    if(g('ipa'))g('ipa').value=precio;
-    const ty=g('ity');
-    if(ty){const opts=Array.from(ty.options).map(o=>o.value);ty.value=opts.includes(tipo)?tipo:'ETF';}
-    invCostPreview();
-    const sr=g('sr');
-    if(sr)sr.innerHTML=`<div style="padding:8px 10px;background:rgba(0,212,170,.1);border:1px solid rgba(0,212,170,.3);border-radius:8px;font-size:12px">
-      <b style="color:var(--green)">✓</b> <b>${escH(nombre)}</b> <span style="color:var(--accent)">${escH(ticker)}</span>
-      ${precio>0?`<span style="color:var(--text2);margin-left:6px">— ${f2(precio)} ${r.currency||'€'}${r._live?' <span style="color:var(--green);font-size:10px">● tiempo real</span>':' <span style="color:var(--text2);font-size:10px">(precio orientativo)</span>'}</span>`:''}
-    </div>`;
-  }catch(e){console.error('fillInv',e);}
-}
-function openCashDeposit(){
+function csUpdateTotal(){
   const u=S.user;
-  const saldoActual=u.saldo||0;
-  const invs=u.inv||[];
-  const loans=u.loans||[];
-  const totA=invs.filter(i=>i.abierta!==false).reduce((s,i)=>s+i.qty*(i.pA||0),0);
-  const totD=loans.reduce((s,l)=>s+(l.pendiente||0),0);
-  const patriActual=saldoActual+totA-totD;
-
-  const body=`
-  <div style="background:var(--bg3);border-radius:10px;padding:12px;margin-bottom:14px">
-    <div style="font-size:11px;color:var(--text2);margin-bottom:8px;font-weight:600">BALANCE ACTUAL</div>
-    <div class="g3">
-      <div><div style="font-size:11px;color:var(--text2)">Saldo líquido</div><div style="font-size:16px;font-weight:700;color:var(--blue)">${fE(saldoActual)}</div></div>
-      <div><div style="font-size:11px;color:var(--text2)">Cartera inversiones</div><div style="font-size:16px;font-weight:700;color:var(--green)">${fE(totA)}</div></div>
-      <div><div style="font-size:11px;color:var(--text2)">Patrimonio neto</div><div style="font-size:16px;font-weight:700;color:var(--text)">${fE(patriActual)}</div></div>
-    </div>
-  </div>
-  <div style="margin-bottom:10px">
-    <label class="lbl">Importe a aportar (€)</label>
-    <input id="cd-importe" type="number" value="0" min="0" step="any" placeholder="Ej: 1.000 €" oninput="cashDepositPreview(${saldoActual},${totA},${totD})"/>
-  </div>
-  <div style="margin-bottom:10px">
-    <label class="lbl">Concepto</label>
-    <input id="cd-concepto" value="Aportación de ahorro" placeholder="Ej: Ahorro mensual, Transferencia broker..."/>
-  </div>
-  <div style="margin-bottom:12px">
-    <label class="lbl">Fecha</label>
-    <input id="cd-fecha" type="date" value="${new Date().toISOString().slice(0,10)}"/>
-  </div>
-  <div id="cd-preview" style="display:none;background:rgba(210,138,63,.08);border:1px solid rgba(210,138,63,.28);border-radius:10px;padding:12px">
-    <div style="font-size:11px;color:var(--gold);font-weight:600;margin-bottom:8px">BALANCE TRAS LA APORTACIÓN</div>
-    <div class="g3">
-      <div><div style="font-size:11px;color:var(--text2)">Saldo líquido</div><div id="cd-prev-saldo" style="font-size:16px;font-weight:700;color:var(--green)">—</div></div>
-      <div><div style="font-size:11px;color:var(--text2)">Cartera inversiones</div><div style="font-size:16px;font-weight:700;color:var(--blue)">${fE(totA)}</div></div>
-      <div><div style="font-size:11px;color:var(--text2)">Patrimonio neto</div><div id="cd-prev-pat" style="font-size:16px;font-weight:700;color:var(--text)">—</div></div>
-    </div>
-    <div style="margin-top:8px;font-size:12px;color:var(--text2)">El cash aportado suma directamente al saldo y al balance total.</div>
-  </div>`;
-  openModal('💵 Aportación de Cash al Balance',body,'saveCashDeposit()','Añadir al balance');
+  const invs=(u.inv||[]).filter(i=>i.abierta!==false);
+  let cartera=0;
+  invs.forEach(inv=>{
+    const el=document.getElementById(`cs-p-${inv.id}`);
+    const pA=el?+el.value:inv.pA||0;
+    const val=inv.qty*pA;
+    cartera+=val;
+    const velEl=document.getElementById(`cs-val-${inv.id}`);
+    if(velEl) velEl.textContent=fE(val);
+  });
+  const saldo=+document.getElementById('cs-snap-saldo')?.value||(u.saldo||0);
+  const deudas=+document.getElementById('cs-snap-deudas')?.value||((u.loans||[]).reduce((s,l)=>s+(l.pendiente||0),0));
+  const total=cartera+saldo-deudas;
+  const el=document.getElementById('cs-total');
+  if(el) el.textContent=fE(total);
 }
 
-function cashDepositPreview(saldoActual, totA, totD){
-  const importe=+document.getElementById('cd-importe')?.value||0;
-  const prev=document.getElementById('cd-preview');
-  if(!prev) return;
-  if(importe>0){
-    prev.style.display='block';
-    const nuevoSaldo=saldoActual+importe;
-    const nuevoPatri=nuevoSaldo+totA-totD;
-    const ps=document.getElementById('cd-prev-saldo');
-    const pp=document.getElementById('cd-prev-pat');
-    if(ps) ps.textContent=fE(nuevoSaldo)+' (+'+fE(importe)+')';
-    if(pp) pp.textContent=fE(nuevoPatri)+' (+'+fE(importe)+')';
-  } else {
-    prev.style.display='none';
-  }
-}
-
-function saveCashDeposit(){
-  const importe=+document.getElementById('cd-importe')?.value||0;
-  if(importe<=0){ntf('Introduce un importe mayor que 0');return;}
-  const concepto=document.getElementById('cd-concepto')?.value||'Aportación';
-  const fecha=document.getElementById('cd-fecha')?.value||new Date().toISOString().slice(0,10);
+function saveConsolidation(){
+  const y=+document.getElementById('cs-y')?.value;
+  const mo=+document.getElementById('cs-m')?.value;
+  const nota=document.getElementById('cs-nota')?.value||'';
+  if(!y&&y!==0){ntf('Selecciona el período');return;}
   const u2=JSON.parse(JSON.stringify(S.user));
-  const saldoAntes=u2.saldo||0;
-  u2.saldo=saldoAntes+importe;
-  if(!u2.cashFlow) u2.cashFlow=[];
-  u2.cashFlow.push({id:Date.now(),tipo:'deposito',importe,concepto,fecha,saldoAntes,saldoDespues:u2.saldo});
+  const invs=(u2.inv||[]).filter(i=>i.abierta!==false);
+
+  // Build position snapshot with edited prices
+  const positions=invs.map(inv=>{
+    const el=document.getElementById(`cs-p-${inv.id}`);
+    const pA=el?Math.round(+el.value*100)/100:inv.pA||0;
+    // Also update the live price in the user's inv array
+    const idx=u2.inv.findIndex(x=>x.id===inv.id);
+    if(idx>=0) u2.inv[idx].pA=pA;
+    return {id:inv.id,nombre:inv.nombre,ticker:inv.ticker,tipo:inv.tipo,
+      entidad:inv.entidad||'',titularId:inv.titularId,qty:inv.qty,pA,val:inv.qty*pA};
+  });
+
+  const cartera=positions.reduce((s,p)=>s+p.val,0);
+  const deudas=(u2.loans||[]).reduce((s,l)=>s+(l.pendiente||0),0);
+  const saldo=u2.saldo||0;
+  const total=cartera+saldo-deudas;
+
+  if(!u2.patrimonioReal) u2.patrimonioReal={};
+  if(!u2.patrimonioReal[y]) u2.patrimonioReal[y]={};
+  u2.patrimonioReal[y][mo]={total,saldo,deudas,positions,nota,ts:Date.now()};
+
   persist(u2);closeModal();set({user:u2});
-  ntf(`💰 +${fE(importe)} en saldo · Saldo: ${fE(u2.saldo)} · Patrimonio actualizado`);
+  ntf(`Consolidación ${MN[mo]} ${y} guardada — Patrimonio: ${fE(total)}`);
 }
 
-// ── Cash Out: retirada de efectivo del balance ────────────────────────────────
-// Descuenta del saldo líquido. NO afecta TIR ni beneficio/pérdida de cartera.
-function openCashWithdraw(){
-  const u=S.user;
-  const saldoActual=u.saldo||0;
-  const invs=u.inv||[];
-  const loans=u.loans||[];
-  const totA=invs.filter(i=>i.abierta!==false).reduce((s,i)=>s+i.qty*(i.pA||0),0);
-  const totD=loans.reduce((s,l)=>s+(l.pendiente||0),0);
+function openSnapDetail(y,mo){
+  const snap=(S.user.patrimonioReal||{})[y]?.[mo];
+  if(!snap){ntf('Sin datos para este período');return;}
+  const tits=S.user.titulares||[];
+  function titName(id){const t=tits.find(x=>x.id===id);return t?t.nombre:id||'';}
+  const hasPositions=snap.positions&&snap.positions.length>0;
+  const isLegacy=typeof snap==='number'; // old format
 
-  const body=`
-  <div style="background:var(--bg3);border-radius:10px;padding:12px;margin-bottom:14px">
-    <div style="font-size:11px;color:var(--text2);margin-bottom:8px;font-weight:600">BALANCE ACTUAL</div>
-    <div class="g3">
-      <div><div style="font-size:11px;color:var(--text2)">Saldo líquido</div><div style="font-size:18px;font-weight:700;color:var(--blue)">${fE(saldoActual)}</div></div>
-      <div><div style="font-size:11px;color:var(--text2)">Cartera inversiones</div><div style="font-size:16px;font-weight:700;color:var(--green)">${fE(totA)}</div></div>
-      <div><div style="font-size:11px;color:var(--text2)">Patrimonio neto</div><div style="font-size:16px;font-weight:700;color:var(--text)">${fE(saldoActual+totA-totD)}</div></div>
-    </div>
-  </div>
-  <div style="background:rgba(224,82,82,.07);border:1px solid rgba(224,82,82,.2);border-radius:9px;padding:10px 12px;margin-bottom:12px;font-size:12px;color:var(--text2)">
-    ⚠️ La retirada descuenta del saldo líquido. <b>No afecta</b> al rendimiento ni a la TIR de la cartera de inversiones.
-  </div>
-  <div style="margin-bottom:10px">
-    <label class="lbl">Importe a retirar (€)</label>
-    <input id="cw-importe" type="number" value="0" min="0" max="${saldoActual}" step="any"
-      placeholder="Máx: ${fE(saldoActual)}"
-      oninput="cashWithdrawPreview(${saldoActual},${totA},${totD})"/>
-  </div>
-  <div style="margin-bottom:10px">
-    <label class="lbl">Concepto</label>
-    <input id="cw-concepto" value="Retirada de efectivo" placeholder="Ej: Uso personal, Pago hipoteca..."/>
-  </div>
-  <div style="margin-bottom:12px">
-    <label class="lbl">Fecha</label>
-    <input id="cw-fecha" type="date" value="${new Date().toISOString().slice(0,10)}"/>
-  </div>
-  <div id="cw-preview" style="display:none;background:rgba(224,82,82,.08);border:1px solid rgba(224,82,82,.25);border-radius:10px;padding:12px">
-    <div style="font-size:11px;color:var(--red);font-weight:600;margin-bottom:8px">BALANCE TRAS LA RETIRADA</div>
-    <div class="g3">
-      <div><div style="font-size:11px;color:var(--text2)">Saldo líquido</div><div id="cw-prev-saldo" style="font-size:16px;font-weight:700;color:var(--red)">—</div></div>
-      <div><div style="font-size:11px;color:var(--text2)">Cartera inversiones</div><div style="font-size:16px;font-weight:700;color:var(--green)">${fE(totA)}</div></div>
-      <div><div style="font-size:11px;color:var(--text2)">Patrimonio neto</div><div id="cw-prev-pat" style="font-size:16px;font-weight:700;color:var(--text)">—</div></div>
-    </div>
-  </div>`;
-
-  openModal('💸 Retirada de Cash del Balance',body,'saveCashWithdraw()','Retirar del balance');
-}
-
-function cashWithdrawPreview(saldoActual, totA, totD){
-  const importe=+document.getElementById('cw-importe')?.value||0;
-  const prev=document.getElementById('cw-preview');
-  if(!prev) return;
-  const saldoEl=document.getElementById('cw-prev-saldo');
-  const patriEl=document.getElementById('cw-prev-pat');
-  if(importe>0){
-    prev.style.display='block';
-    const nuevoSaldo=saldoActual-importe;
-    const nuevoPatri=nuevoSaldo+totA-totD;
-    if(saldoEl) saldoEl.textContent=fE(nuevoSaldo)+(nuevoSaldo<0?' ⚠️ SALDO INSUFICIENTE':'');
-    if(saldoEl) saldoEl.style.color=nuevoSaldo<0?'var(--red)':'var(--green)';
-    if(patriEl) patriEl.textContent=fE(nuevoPatri)+' (−'+fE(importe)+')';
-  } else {
-    prev.style.display='none';
-  }
-}
-
-function saveCashWithdraw(){
-  const importe=+document.getElementById('cw-importe')?.value||0;
-  if(importe<=0){ntf('Introduce un importe mayor que 0');return;}
-  const u2=JSON.parse(JSON.stringify(S.user));
-  const saldoAntes=u2.saldo||0;
-  if(importe>saldoAntes){
-    ntf('⚠️ Saldo insuficiente — máximo '+fE(saldoAntes));
+  if(isLegacy){
+    // Old format: just a number
+    openModal(`📋 ${MN[mo]} ${y}`,`
+    <div style="text-align:center;padding:20px">
+      <div style="font-size:13px;color:var(--text2);margin-bottom:8px">Patrimonio registrado (formato anterior)</div>
+      <div style="font-size:32px;font-weight:800;color:var(--gold)">${fE(snap)}</div>
+      <div style="font-size:12px;color:var(--text2);margin-top:8px">Sin desglose de activos disponible</div>
+    </div>`,`quickSnapEdit(${y},${mo},${snap})`,'Editar valor',true);
     return;
   }
-  const concepto=document.getElementById('cw-concepto')?.value||'Retirada';
-  const fecha=document.getElementById('cw-fecha')?.value||new Date().toISOString().slice(0,10);
-  u2.saldo=saldoAntes-importe;
-  if(!u2.cashFlow) u2.cashFlow=[];
-  // tipo:'retiro' — no afecta TIR ni P&L de inversiones
-  u2.cashFlow.push({id:Date.now(),tipo:'retiro',importe,concepto,fecha,saldoAntes,saldoDespues:u2.saldo});
-  persist(u2);closeModal();set({user:u2});
-  ntf(`💸 −${fE(importe)} retirados · Saldo: ${fE(u2.saldo)}`);
-}
-function calcCuotaFrances(capital, tipoAnual, plazoMeses){
-  if(!capital||!plazoMeses) return 0;
-  if(!tipoAnual) return capital/plazoMeses; // interés 0
-  const r=tipoAnual/100/12;
-  return capital * r * Math.pow(1+r,plazoMeses) / (Math.pow(1+r,plazoMeses)-1);
-}
 
-function openAddLoan(){
-  const tits=S.user.titulares||[];
-  const today=new Date().toISOString().slice(0,10);
   const body=`
-  <div style="margin-bottom:8px"><label class="lbl">Nombre</label><input id="ln" placeholder="Hipoteca vivienda principal..."/></div>
-  <div class="g2" style="margin-bottom:8px">
-    <div><label class="lbl">Titular</label><select id="lt">${tits.map(t=>`<option value="${t.id}">${t.nombre}</option>`).join('')}</select></div>
-    <div><label class="lbl">Tipo</label><select id="ltp" onchange="loanCalcPreview()"><option value="hipoteca">Hipoteca</option><option value="prestamo">Préstamo</option></select></div>
-  </div>
-  <div class="g2" style="margin-bottom:8px">
-    <div><label class="lbl">Capital original (€)</label><input id="lca" type="number" value="0" oninput="loanCalcPreview()"/></div>
-    <div><label class="lbl">Capital pendiente (€)</label><input id="lpe" type="number" value="0" oninput="loanCalcPreview()"/></div>
-  </div>
-  <div class="g2" style="margin-bottom:8px">
-    <div><label class="lbl">Tipo de interés anual (%)</label><input id="lin" type="number" step="0.01" value="2.0" oninput="loanCalcPreview()"/></div>
-    <div><label class="lbl">Plazo restante (años)</label><input id="lplazo" type="number" step="0.5" value="20" oninput="loanCalcPreview()"/></div>
-  </div>
-  <div class="g2" style="margin-bottom:8px">
-    <div>
-      <label class="lbl">Cuota mensual (€) <span style="color:var(--accent);font-size:10px">— déjalo en 0 para autocalcular</span></label>
-      <input id="lcu" type="number" value="0" oninput="loanCalcPreview()"/>
+  <div style="font-size:11px;color:var(--text2);margin-bottom:12px">📅 ${MN[mo]} ${y} · Consolidado: ${snap.ts?new Date(snap.ts).toLocaleDateString('es-ES'):''}</div>
+  <div class="g3" style="margin-bottom:14px">
+    <div style="background:var(--bg3);border-radius:8px;padding:10px;text-align:center">
+      <div style="font-size:10px;color:var(--text2)">Cartera</div>
+      <div style="font-size:15px;font-weight:700;color:var(--green)">${fE(snap.positions?snap.positions.reduce((s,p)=>s+p.val,0):0)}</div>
     </div>
-    <div>
-      <label class="lbl">📐 Cuota calculada (sistema francés)</label>
-      <div id="loan-preview" style="padding:9px 12px;background:var(--bg3);border:1px solid var(--border);border-radius:8px;font-size:13px;font-weight:700;color:var(--green)">—</div>
+    <div style="background:var(--bg3);border-radius:8px;padding:10px;text-align:center">
+      <div style="font-size:10px;color:var(--text2)">Saldo</div>
+      <div style="font-size:15px;font-weight:700;color:var(--blue)">${fE(snap.saldo||0)}</div>
+    </div>
+    <div style="background:var(--bg3);border-radius:8px;padding:10px;text-align:center">
+      <div style="font-size:10px;color:var(--text2)">Patrimonio neto</div>
+      <div style="font-size:15px;font-weight:700;color:var(--gold)">${fE(snap.total||0)}</div>
     </div>
   </div>
-  <div class="g2" style="margin-bottom:8px">
-    <div><label class="lbl">Fecha inicio</label><input id="li" type="date" value="${today}" oninput="loanCalcPreview()"/></div>
-    <div><label class="lbl">Fecha vencimiento <span style="color:var(--text2);font-size:10px">(se calcula si dejas vacío)</span></label><input id="lf" type="date" oninput="loanCalcPreview()"/></div>
-  </div>
-  <div id="loan-summary" style="margin-top:4px;padding:10px 12px;background:rgba(108,99,255,.08);border:1px solid rgba(108,99,255,.2);border-radius:8px;font-size:12px;display:none"></div>`;
-  openModal('🏦 Añadir Préstamo / Hipoteca',body,'saveLoan()','Añadir');
-  setTimeout(loanCalcPreview, 50);
+  ${snap.nota?`<div style="background:var(--bg3);border-radius:8px;padding:9px;font-size:12px;margin-bottom:12px;color:var(--text2)">📝 ${escH(snap.nota)}</div>`:''}
+  ${hasPositions?`<div style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:8px;text-transform:uppercase;letter-spacing:.4px">Posiciones consolidadas</div>
+  <div class="ov"><table>
+    <thead><tr><th>Activo</th><th>Tipo</th><th>Entidad</th><th>Titular</th><th>Qty</th><th>Precio cierre</th><th>Valor</th><th>✏️</th></tr></thead>
+    <tbody>
+      ${snap.positions.map(p=>`<tr>
+        <td><div style="font-weight:600;font-size:12px">${escH(p.nombre)}</div><div style="font-size:10px;color:var(--text2)">${escH(p.ticker)}</div></td>
+        <td style="font-size:11px"><span style="color:${ASSET_CLASS_COLORS[normClass(p.tipo)]||'#888'}">${normClass(p.tipo)}</span></td>
+        <td style="font-size:11px;color:var(--text2)">${escH(p.entidad||'—')}</td>
+        <td style="font-size:11px">${titName(p.titularId)}</td>
+        <td style="font-size:12px">${p.qty}</td>
+        <td style="font-weight:600">${f2(p.pA)} €</td>
+        <td style="font-weight:700;color:var(--green)">${fE(p.val)}</td>
+        <td><button class="bo" onclick="editSnapPosition(${y},${mo},'${p.id}')" style="padding:2px 6px;font-size:11px">✏️</button></td>
+      </tr>`).join('')}
+    </tbody>
+  </table></div>`:'<div style="color:var(--text2);font-size:12px">Sin desglose de posiciones.</div>'}`;
+  openModal(`📋 Detalle consolidación — ${MN[mo]} ${y}`,body,null,'Cerrar',true);
 }
 
-function loanCalcPreview(){
-  const capital=+document.getElementById('lca')?.value||0;
-  const pendiente=+document.getElementById('lpe')?.value||capital;
-  const tipo=+document.getElementById('lin')?.value||0;
-  const plazoAnios=+document.getElementById('lplazo')?.value||0;
-  const plazoMeses=Math.round(plazoAnios*12);
-  const cuotaManual=+document.getElementById('lcu')?.value||0;
+function quickSnapEdit(y,mo,currentVal){
+  const body=`
+  <div style="margin-bottom:10px">
+    <label class="lbl">Valor patrimonio real (€)</label>
+    <input id="sn-val" type="number" value="${currentVal}"/>
+  </div>
+  <input type="hidden" id="sn-y" value="${y}"/><input type="hidden" id="sn-m" value="${mo}"/>`;
+  openModal(`Editar — ${MN[mo]} ${y}`,body,'saveSimpleSnap()','Guardar');
+}
+function saveSimpleSnap(){
+  const y=+document.getElementById('sn-y')?.value;
+  const mo=+document.getElementById('sn-m')?.value;
+  const val=+document.getElementById('sn-val')?.value;
+  if(!val){ntf('Introduce un valor');return;}
+  const u2=JSON.parse(JSON.stringify(S.user));
+  if(!u2.patrimonioReal) u2.patrimonioReal={};
+  if(!u2.patrimonioReal[y]) u2.patrimonioReal[y]={};
+  // Keep as number for backwards compat
+  u2.patrimonioReal[y][mo]=val;
+  persist(u2);closeModal();set({user:u2});ntf('Valor actualizado');
+}
 
-  // Auto-fill vencimiento from inicio + plazo if blank
-  const ini=document.getElementById('li')?.value;
-  const finEl=document.getElementById('lf');
-  if(ini&&plazoMeses&&finEl&&!finEl.value){
-    const d=new Date(ini);d.setMonth(d.getMonth()+plazoMeses);
-    finEl.value=d.toISOString().slice(0,10);
+function editSnapPosition(y,mo,posId){
+  const snap=(S.user.patrimonioReal||{})[y]?.[mo];
+  if(!snap||!snap.positions) return;
+  const pos=snap.positions.find(p=>String(p.id)===String(posId));
+  if(!pos) return;
+  const body=`
+  <div style="margin-bottom:8px"><div style="font-weight:700">${escH(pos.nombre)}</div><div style="font-size:12px;color:var(--text2)">${escH(pos.ticker)} · Qty: ${pos.qty}</div></div>
+  <div class="g2" style="margin-bottom:10px">
+    <div><label class="lbl">Precio a cierre de mes (€)</label><input id="ep-precio" type="number" step="0.01" value="${pos.pA}"/></div>
+    <div><label class="lbl">Valor total</label><div id="ep-val" style="padding:9px 11px;background:var(--bg3);border-radius:8px;font-weight:700;font-size:14px">${fE(pos.val)}</div></div>
+  </div>`;
+  openModal(`✏️ Editar precio — ${escH(pos.nombre)}`,body,`saveSnapPosition(${y},${mo},'${posId}')`, 'Guardar');
+  setTimeout(()=>{
+    const el=document.getElementById('ep-precio');
+    if(el) el.oninput=()=>{const v=document.getElementById('ep-val');if(v)v.textContent=fE(pos.qty*(+el.value||0));};
+  },50);
+}
+function saveSnapPosition(y,mo,posId){
+  const precio=+document.getElementById('ep-precio')?.value||0;
+  const u2=JSON.parse(JSON.stringify(S.user));
+  const snap=u2.patrimonioReal?.[y]?.[mo];
+  if(!snap||!snap.positions) return;
+  const idx=snap.positions.findIndex(p=>String(p.id)===String(posId));
+  if(idx>=0){
+    snap.positions[idx].pA=precio;
+    snap.positions[idx].val=snap.positions[idx].qty*precio;
+    // Recalculate total
+    snap.total=snap.positions.reduce((s,p)=>s+p.val,0)+(snap.saldo||0)-(snap.deudas||0);
   }
+  persist(u2);closeModal();set({user:u2});ntf('Precio actualizado');
+}
 
-  const cuotaCalc=calcCuotaFrances(pendiente||capital, tipo, plazoMeses);
-  const cuotaEfectiva=cuotaManual>0?cuotaManual:cuotaCalc;
-  const preview=document.getElementById('loan-preview');
-  const summary=document.getElementById('loan-summary');
+function openEditSnap(){ openConsolidateMes(); }
 
-  if(preview){
-    if(cuotaCalc>0){
-      preview.textContent=`${f2(cuotaCalc)} €/mes`;
-      preview.style.color='var(--green)';
-    } else {
-      preview.textContent='—';preview.style.color='var(--text2)';
-    }
+function delConsolidation(y,mo){
+  if(!confirm(`¿Eliminar la consolidación de ${MN[mo]} ${y}?`)) return;
+  const u2=JSON.parse(JSON.stringify(S.user));
+  if(u2.patrimonioReal?.[y]?.[mo]!==undefined){
+    delete u2.patrimonioReal[y][mo];
+    if(Object.keys(u2.patrimonioReal[y]).length===0) delete u2.patrimonioReal[y];
   }
+  persist(u2);set({user:u2});ntf('Consolidación eliminada');
+}
 
-  if(summary&&capital>0&&cuotaEfectiva>0&&plazoMeses>0){
-    const totalPagado=cuotaEfectiva*plazoMeses;
-    const totalIntereses=totalPagado-(pendiente||capital);
-    summary.style.display='block';
-    summary.innerHTML=`
-      <div style="display:flex;gap:16px;flex-wrap:wrap">
-        <div><span style="color:var(--text2)">Cuota efectiva:</span> <b style="color:var(--green)">${f2(cuotaEfectiva)} €/mes</b></div>
-        <div><span style="color:var(--text2)">Total a pagar:</span> <b>${f2(totalPagado)} €</b></div>
-        <div><span style="color:var(--text2)">Total intereses:</span> <b style="color:var(--red)">${f2(Math.max(0,totalIntereses))} €</b></div>
-        <div><span style="color:var(--text2)">Plazo:</span> <b>${plazoAnios} años (${plazoMeses} meses)</b></div>
+function saveSnap(){
+  const y=+document.getElementById('sn-y')?.value;
+  const mo=+document.getElementById('sn-m')?.value;
+  const val=+document.getElementById('sn-val')?.value;
+  if(!val){ntf('Introduce un valor');return;}
+  const u2=JSON.parse(JSON.stringify(S.user));
+  if(!u2.patrimonioReal) u2.patrimonioReal={};
+  if(!u2.patrimonioReal[y]) u2.patrimonioReal[y]={};
+  u2.patrimonioReal[y][mo]=val;
+  persist(u2);closeModal();set({user:u2});ntf('Patrimonio actualizado');
+}
+
+function quickSnap(y,mo,theo){
+  openConsolidateMes();
+}
+
+// ─── PROFILE TEST ─────────────────────────────────────────────────────────────
+function openProfileTest(){
+  const existing=S.user.profileAnswers||{};
+  const body=`<div id="ptest-body">${renderProfileQ(0,existing)}</div>`;
+  openModal('🎯 Test Perfil Inversor',body,null,'');
+  window._pAnswers={...existing};
+}
+function renderProfileQ(step,answers){
+  const q=PROFILE_QUESTIONS[step];
+  const isLast=step===PROFILE_QUESTIONS.length-1;
+  return `<div>
+    <div style="font-size:12px;color:var(--text2);margin-bottom:4px">Pregunta ${step+1} de ${PROFILE_QUESTIONS.length}</div>
+    <div style="font-weight:700;font-size:14px;margin-bottom:14px">${q.q}</div>
+    ${q.opts.map((o,i)=>`<div onclick="selectPQ(${step},${i})"
+      style="padding:10px 14px;background:${answers[q.id]===i?'rgba(108,99,255,.2)':'var(--bg3)'};border:1px solid ${answers[q.id]===i?'var(--accent)':'var(--border)'};border-radius:9px;cursor:pointer;margin-bottom:7px;font-size:13px;transition:all .2s"
+      onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='${answers[q.id]===i?'var(--accent)':'var(--border)'}'">
+      ${o.label}
+    </div>`).join('')}
+    <div style="display:flex;justify-content:space-between;margin-top:16px">
+      ${step>0?`<button class="bo" onclick="navPQ(${step-1})" style="padding:7px 13px">← Anterior</button>`:'<div></div>'}
+      ${isLast?`<button class="ba" onclick="finishProfile()" style="padding:7px 16px">Ver mi perfil →</button>`:`<button class="ba" onclick="navPQ(${step+1})" style="padding:7px 13px">Siguiente →</button>`}
+    </div>
+  </div>`;
+}
+function selectPQ(step,optIdx){
+  const q=PROFILE_QUESTIONS[step];
+  window._pAnswers[q.id]=optIdx;
+  document.getElementById('ptest-body').innerHTML=renderProfileQ(step,window._pAnswers);
+}
+function navPQ(step){
+  document.getElementById('ptest-body').innerHTML=renderProfileQ(step,window._pAnswers||{});
+}
+function finishProfile(){
+  const ans=window._pAnswers||{};
+  let score=0;
+  PROFILE_QUESTIONS.forEach(q=>{
+    const idx=ans[q.id];
+    if(idx!=null)score+=q.opts[idx].pts;
+  });
+  const prof=scoreToProfile(score);
+  document.getElementById('ptest-body').innerHTML=`
+    <div style="text-align:center;padding:20px 0">
+      <div style="font-size:14px;color:var(--text2);margin-bottom:8px">Tu puntuación: <b>${score}/60</b></div>
+      <div style="font-size:28px;font-weight:800;color:${prof.color};margin-bottom:6px">${prof.label}</div>
+      <div style="font-size:12px;color:var(--text2);margin-bottom:14px">${prof.desc||''}</div>
+      <div class="g2" style="margin-bottom:16px;text-align:left">
+        <div style="background:var(--bg3);border-radius:10px;padding:12px;text-align:center">
+          <div style="font-size:11px;color:var(--text2)">Renta Variable</div>
+          <div style="font-size:22px;font-weight:700;color:var(--accent)">${prof.rvMin||0}–${prof.rvMax||0}%</div>
+          <div style="font-size:10px;color:var(--text2);margin-top:2px">Rango Renta4</div>
+        </div>
+        <div style="background:var(--bg3);border-radius:10px;padding:12px;text-align:center">
+          <div style="font-size:11px;color:var(--text2)">Renta Fija</div>
+          <div style="font-size:22px;font-weight:700;color:var(--blue)">${prof.rfMid||0}%</div>
+          <div style="font-size:10px;color:var(--text2);margin-top:2px">Peso típico</div>
+        </div>
+        <div style="background:var(--bg3);border-radius:10px;padding:12px;text-align:center">
+          <div style="font-size:11px;color:var(--text2)">Rentabilidad esperada</div>
+          <div style="font-size:22px;font-weight:700;color:${prof.color}">${prof.retExp}%/año</div>
+          <div style="font-size:10px;color:var(--text2);margin-top:2px">Fuente: Renta4</div>
+        </div>
+        <div style="background:var(--bg3);border-radius:10px;padding:12px;text-align:center">
+          <div style="font-size:11px;color:var(--text2)">Desv. estándar (σ)</div>
+          <div style="font-size:22px;font-weight:700;color:var(--purple)">±${prof.std}%</div>
+          <div style="font-size:10px;color:var(--text2);margin-top:2px">Volatilidad anual</div>
+        </div>
+      </div>
+      <div style="font-size:12px;color:var(--text2);margin-bottom:16px;padding:10px;background:var(--bg3);border-radius:9px;text-align:left">
+        Con el perfil <b style="color:${prof.color}">${prof.label}</b> (datos Renta4):<br>
+        · Escenario base: <b>${prof.retExp}%</b>/año<br>
+        · ±1σ (68% prob.): <b>${(prof.retExp-prof.std).toFixed(1)}% a ${(prof.retExp+prof.std).toFixed(1)}%</b><br>
+        · ±2σ (95% prob.): <b>${(prof.retExp-2*prof.std).toFixed(1)}% a ${(prof.retExp+2*prof.std).toFixed(1)}%</b>
+      </div>
+      <button class="ba" onclick="applyProfile('${prof.id}',${score})" style="width:100%;padding:11px;font-size:14px;font-weight:600">Aplicar este perfil</button>
+    </div>`;
+}
+function applyProfile(profId,score){
+  const u2={...S.user,profileId:profId,profileScore:score,profileAnswers:window._pAnswers||S.user.profileAnswers||{}};
+  persist(u2);closeModal();set({user:u2});ntf('✓ Perfil guardado: '+getProfile(profId).label);
+}
+function changeProfile(profId){
+  const u2={...S.user,profileId:profId};
+  persist(u2);set({user:u2});ntf('Perfil: '+getProfile(profId).label);
+}
+
+
+// ─── MERCADOS & WATCHLIST ──────────────────────────────────────────────────────
+const MKT_GROUPS={
+  indices:{ico:'📊',label:'Índices',items:[
+    {sym:'^IBEX',n:'IBEX 35',cat:'ESP'},{sym:'^STOXX50E',n:'Euro Stoxx 50',cat:'EU'},
+    {sym:'^GDAXI',n:'DAX 40',cat:'DE'},{sym:'^FCHI',n:'CAC 40',cat:'FR'},
+    {sym:'^FTSE',n:'FTSE 100',cat:'UK'},{sym:'^GSPC',n:'S&P 500',cat:'US'},
+    {sym:'^IXIC',n:'Nasdaq',cat:'US'},{sym:'^DJI',n:'Dow Jones',cat:'US'},
+    {sym:'^N225',n:'Nikkei 225',cat:'JP'},{sym:'^HSI',n:'Hang Seng',cat:'HK'},
+  ]},
+  divisas:{ico:'💱',label:'Divisas',items:[
+    {sym:'EURUSD=X',n:'EUR/USD',cat:''},{sym:'EURGBP=X',n:'EUR/GBP',cat:''},
+    {sym:'EURJPY=X',n:'EUR/JPY',cat:''},{sym:'EURCHF=X',n:'EUR/CHF',cat:''},
+    {sym:'EURCNY=X',n:'EUR/CNY',cat:''},{sym:'EURCAD=X',n:'EUR/CAD',cat:''},
+    {sym:'BTC-EUR',n:'Bitcoin/EUR',cat:'Cripto'},{sym:'ETH-EUR',n:'Ethereum/EUR',cat:'Cripto'},
+  ]},
+  materias:{ico:'🛢️',label:'Materias Primas',items:[
+    {sym:'GC=F',n:'Oro ($/oz)',cat:''},{sym:'SI=F',n:'Plata ($/oz)',cat:''},
+    {sym:'CL=F',n:'Petróleo WTI',cat:''},{sym:'BZ=F',n:'Petróleo Brent',cat:''},
+    {sym:'NG=F',n:'Gas Natural',cat:''},{sym:'HG=F',n:'Cobre',cat:''},
+  ]},
+  rf:{ico:'📄',label:'Renta Fija',items:[
+    {sym:'^IRX',n:'T-Bill 3M',cat:'US'},{sym:'^FVX',n:'T-Note 5Y',cat:'US'},
+    {sym:'^TNX',n:'T-Note 10Y',cat:'US'},{sym:'^TYX',n:'T-Bond 30Y',cat:'US'},
+    {sym:'ES3Y=X',n:'Bund 3Y',cat:'EU'},{sym:'ES10Y=X',n:'Bund 10Y',cat:'EU'},
+  ]},
+};
+
+// Cache for market prices: {sym: {price, pct, name, ts}}
+// ── PRECIO PROXY CONFIG ─────────────────────────────────────────────────────
+// Una vez desplegues el worker de Cloudflare, pon aquí la URL:
+// Ej: 'https://mi-proxy.miusuario.workers.dev'
+const PRICE_PROXY = 'https://invertir-de-0-a-100-la-app.vercel.app/api/prices';
+
+let MKT_CACHE={};
+let MKT_LOADING=new Set();
+// Intenta obtener crumb de Yahoo al inicio (mejora tasa de éxito)
+(async()=>{try{const r=await fetch('https://query1.finance.yahoo.com/v1/test/getcrumb',{credentials:'include',mode:'cors'});if(r.ok){const t=await r.text();if(t&&t.length<60&&!t.includes('<'))window._yfCrumb=t;}}catch(e){}})();
+// Fetch Yahoo Finance crumb on startup (improves success rate)
+(async function getYFCrumb(){
+  try{
+    // Get crumb from Yahoo Finance
+    const r=await fetch('https://query1.finance.yahoo.com/v1/test/getcrumb',{credentials:'include'});
+    if(r.ok){const t=await r.text();if(t&&t.length<50&&t[0]!=='<'){window._yfCrumb=t;console.log('YF crumb:',t);}}
+  }catch(e){}
+})();
+
+async function mktFetchGroup(group){
+  const items=MKT_GROUPS[group]?.items||[];
+  const toFetch=items.filter(i=>!MKT_CACHE[i.sym]||Date.now()-MKT_CACHE[i.sym].ts>300000);
+  if(!toFetch.length){render();return;}
+  toFetch.forEach(i=>MKT_LOADING.add(i.sym));
+  render();
+  await Promise.allSettled(toFetch.map(item=>mktFetchOne(item.sym,item.n)));
+  render();
+}
+
+async function mktFetchWatchlist(){
+  const wl=getWatchlist();if(!wl.length)return;
+  const toFetch=wl.filter(w=>!MKT_CACHE[w.sym]||Date.now()-MKT_CACHE[w.sym].ts>300000);
+  if(!toFetch.length)return;
+  toFetch.forEach(w=>MKT_LOADING.add(w.sym));render();
+  await Promise.allSettled(toFetch.map(w=>mktFetchOne(w.sym,w.name)));
+  render();
+}
+
+async function mktFetchMembers(idxSym){
+  const members=IDX_MEMBERS[idxSym]||[];
+  const toFetch=members.filter(m=>!MKT_CACHE[m.sym]);
+  if(!toFetch.length){render();return;}
+  toFetch.forEach(m=>MKT_LOADING.add(m.sym));render();
+  await Promise.allSettled(toFetch.map(m=>mktFetchOne(m.sym,m.n)));
+  render();
+}
+
+
+
+// Watchlist stored in user data
+function getWatchlist(){return S.user?.watchlist||[];}
+function addToWatchlist(sym,name){
+  if(getWatchlist().find(w=>w.sym===sym)){ntf('Ya está en la watchlist');return;}
+  const u2={...S.user,watchlist:[...(S.user.watchlist||[]),{sym,name,added:new Date().toISOString().slice(0,10)}]};
+  persist(u2);set({user:u2});ntf(`${sym} añadido a Watchlist`);
+  mktFetchGroup('watchlist');
+}
+function removeFromWatchlist(sym){
+  const u2={...S.user,watchlist:(S.user.watchlist||[]).filter(w=>w.sym!==sym)};
+  persist(u2);set({user:u2});
+}
+
+
+// Chart fetch — returns array of {date, close}
+async function fetchChartData(sym, range='1mo', interval='1d'){
+  try{
+    const r=await tryFetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=${interval}&range=${range}`);
+    const result=r?.chart?.result?.[0];
+    if(!result) return null;
+    const ts=result.timestamp||[];
+    const closes=result.indicators?.quote?.[0]?.close||[];
+    return ts.map((t,i)=>({date:new Date(t*1000).toLocaleDateString('es-ES',{month:'short',day:'numeric'}),close:closes[i]})).filter(d=>d.close!=null);
+  }catch(e){return null;}
+}
+
+// Stock chart modal — full page chart with range selector
+let MCH={sym:null,name:'',range:'1mo',data:null,loading:false};
+async function openStockChart(sym,name){
+  MCH={sym,name,range:'1mo',data:null,loading:true};
+  render();
+  const data=await fetchChartData(sym,'1mo','1d');
+  MCH.data=data;MCH.loading=false;
+  render();
+}
+function closeStockChart(){MCH.sym=null;render();}
+async function changeChartRange(range){
+  const intervals={'1d':'5m','5d':'30m','1mo':'1d','3mo':'1d','6mo':'1wk','1y':'1wk','5y':'1mo'};
+  MCH.range=range;MCH.loading=true;MCH.data=null;render();
+  const data=await fetchChartData(MCH.sym,range,intervals[range]||'1d');
+  MCH.data=data;MCH.loading=false;
+  render();
+}
+
+function renderStockChartModal(){
+  const sym=MCH.sym,name=MCH.name;
+  const cached=MKT_CACHE[sym];
+  const data=MCH.data;
+  const ranges=[['1d','1D'],['5d','5D'],['1mo','1M'],['3mo','3M'],['6mo','6M'],['1y','1A'],['5y','5A']];
+  
+  // Build SVG chart from data
+  let chartSVG='<div style="display:flex;align-items:center;justify-content:center;height:200px;color:var(--text2);font-size:13px">⏳ Cargando datos...</div>';
+  if(data&&data.length>1&&!MCH.loading){
+    const W=340,H=170,pad=8,padt=20;
+    const vals=data.map(d=>d.close);
+    const hi=Math.max(...vals),lo=Math.min(...vals);
+    const rng=hi-lo||hi*0.02;
+    const up=vals[vals.length-1]>=vals[0];
+    const col=up?'var(--green)':'var(--red)';
+    const colFill=up?'rgba(76,175,125,0.12)':'rgba(224,82,82,0.12)';
+    const py=v=>padt+((H-padt-pad)*(1-(v-lo)/rng));
+    const px=i=>(W-pad*2)*i/(data.length-1)+pad;
+    const pts=data.map((d,i)=>`${px(i).toFixed(1)},${py(d.close).toFixed(1)}`).join(' ');
+    // Area fill path
+    const areaPath=`M${pad},${H-pad} L${data.map((d,i)=>`${px(i).toFixed(1)},${py(d.close).toFixed(1)}`).join(' L')} L${px(data.length-1).toFixed(1)},${H-pad} Z`;
+    // X axis labels (show ~5)
+    const step=Math.max(1,Math.floor(data.length/4));
+    const xLabels=data.filter((_,i)=>i%step===0||i===data.length-1).map((d,i,arr)=>`<text x="${px(i===0?0:data.length-1-(arr.length-1-i)*step).toFixed(0)}" y="${H}" fill="var(--text2)" font-size="8" text-anchor="middle">${d.date}</text>`).join('');
+    chartSVG=`<svg viewBox="0 0 ${W} ${H+10}" style="width:100%;height:200px;display:block">
+      <path d="${areaPath}" fill="${colFill}"/>
+      <polyline points="${pts}" fill="none" stroke="${col}" stroke-width="1.8" stroke-linejoin="round"/>
+      <text x="${pad}" y="${padt-3}" fill="var(--text2)" font-size="8" font-family="monospace">$${hi.toFixed(2)}</text>
+      <text x="${pad}" y="${H-pad-2}" fill="var(--text2)" font-size="8" font-family="monospace">$${lo.toFixed(2)}</text>
+      ${xLabels}
+    </svg>`;
+  } else if(!MCH.loading){
+    chartSVG='<div style="display:flex;align-items:center;justify-content:center;height:200px;color:var(--text2);font-size:12px">No se pudieron cargar los datos del gráfico.<br>Puede ser por restricciones CORS en el navegador.</div>';
+  }
+  
+  return `<div style="position:fixed;inset:0;background:rgba(0,0,0,.88);z-index:500;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this)closeStockChart()">
+    <div class="card" style="width:100%;max-width:480px;max-height:90vh;overflow-y:auto">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px">
+        <div>
+          <div style="font-size:18px;font-weight:800;color:var(--gold);font-family:monospace">${escH(sym)}</div>
+          <div style="font-size:11px;color:var(--text2)">${escH(name)}</div>
+          ${cached?`<div style="display:flex;align-items:baseline;gap:8px;margin-top:5px">
+            <span style="font-size:22px;font-weight:800;font-family:monospace">${cached.currency==='EUR'?fE(cached.price):cached.price.toFixed(2)+' '+cached.currency}</span>
+            ${cached.pct!=null?`<span style="font-size:13px;font-weight:700;padding:2px 7px;border-radius:6px;background:${cached.pct>=0?'rgba(76,175,125,.15)':'rgba(224,82,82,.15)'};color:${cached.pct>=0?'var(--green)':'var(--red)'};font-family:monospace">${cached.pct>=0?'+':''}${cached.pct.toFixed(2)}%</span>`:''}
+          </div>`:''}
+        </div>
+        <button class="bo" onclick="closeStockChart()" style="padding:6px 10px;font-size:14px">✕</button>
+      </div>
+      <!-- Range buttons -->
+      <div style="display:flex;gap:4px;margin-bottom:10px;flex-wrap:wrap">
+        ${ranges.map(([r,l])=>`<button class="${MCH.range===r?'ba':'bo'}" onclick="changeChartRange('${r}')" style="font-size:11px;padding:4px 9px;min-width:36px">${l}</button>`).join('')}
+      </div>
+      <!-- Chart -->
+      <div style="background:var(--bg3);border-radius:10px;padding:8px;margin-bottom:10px;min-height:200px">${chartSVG}</div>
+      <!-- Actions -->
+      <div style="display:flex;gap:8px">
+        <button class="bs" onclick="addToWatchlist('${sym}','${escH(name)}')" style="flex:1;font-size:12px">⭐ Añadir Watchlist</button>
+        <button class="bo" onclick="closeStockChart()" style="flex:1;font-size:12px">Cerrar</button>
+      </div>
+      <div style="font-size:9px;color:var(--text2);margin-top:8px;text-align:center">Datos con retraso 15-20 min · Yahoo Finance · No es asesoramiento</div>
+    </div>
+  </div>`;
+}
+
+function addWlItem(){
+  const inp=document.getElementById('wl-input');
+  if(!inp||!inp.value.trim())return;
+  const sym=inp.value.trim().toUpperCase();
+  addToWatchlist(sym,sym);
+  inp.value='';
+}
+
+// ─── HERRAMIENTAS ──────────────────────────────────────────────────────────────
+function tabHerramientas(){
+  const htab=S.htab||'mercados';
+  return `<div class="sec">${MCH.sym?renderStockChartModal():''}
+  <div class="sech"><div class="sect">🛠️ Herramientas</div></div>
+  
+  <!-- Sub-tabs -->
+  <div style="display:flex;background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:3px;margin-bottom:14px;gap:2px;overflow-x:auto;scrollbar-width:none">
+    ${[['mercados','📡 Mercados'],['watchlist','⭐ Watchlist'],['screener','🔍 Screener'],['radar','🎯 Radar'],['calculadoras','🔢 Calc']].map(([id,l])=>`
+      <button class="${htab===id?'ba':'bo'}" onclick="set({htab:'${id}'})" style="flex:1;min-width:0;padding:8px 4px;font-size:11px;font-weight:700;border:none;border-radius:8px;white-space:nowrap">${l}</button>`).join('')}
+  </div>
+  
+  ${htab==='mercados'?tabMercadosInner():''}
+  ${htab==='watchlist'?tabWatchlistInner():''}
+  ${htab==='screener'?tabScreenerInner():''}
+  ${htab==='radar'?tabRadarInner():''}
+  ${htab==='calculadoras'?tabCalcs():''}
+  </div>`;
+}
+
+function tabCalcs(){
+  setTimeout(()=>{calcIC();calcR72();calcTIR();},80);
+  return `<div>
+  <!-- Interés compuesto -->
+  <div class="card" style="margin-bottom:12px">
+    <div style="font-weight:700;font-size:14px;margin-bottom:12px">📈 Calculadora de Interés Compuesto</div>
+    <div class="g2" style="margin-bottom:10px">
+      <div><label class="lbl">Capital inicial (€)</label><input type="number" id="ci-cap" value="10000" oninput="calcIC()"/></div>
+      <div><label class="lbl">Aportación mensual (€)</label><input type="number" id="ci-aport" value="500" oninput="calcIC()"/></div>
+      <div><label class="lbl">Rentabilidad anual (%)</label><input type="number" id="ci-rent" value="7" step="0.1" oninput="calcIC()"/></div>
+      <div><label class="lbl">Años</label><input type="number" id="ci-años" value="20" oninput="calcIC()"/></div>
+    </div>
+    <div id="ci-result" style="background:var(--bg3);border-radius:10px;padding:12px"></div>
+  </div>
+  <!-- Regla 72 -->
+  <div class="card" style="margin-bottom:12px">
+    <div style="font-weight:700;font-size:14px;margin-bottom:10px">⚡ Regla del 72</div>
+    <div class="g2" style="margin-bottom:10px">
+      <div><label class="lbl">Rentabilidad anual (%)</label><input type="number" id="r72-rent" value="7" step="0.1" oninput="calcR72()"/></div>
+      <div><label class="lbl">Años para doblar</label><input type="number" id="r72-años" value="" placeholder="auto" oninput="calcR72r()"/></div>
+    </div>
+    <div id="r72-result" style="background:var(--bg3);border-radius:10px;padding:12px;font-size:13px;color:var(--text2)"></div>
+  </div>
+  <!-- TIR manual -->
+  <div class="card">
+    <div style="font-weight:700;font-size:14px;margin-bottom:10px">📊 Cálculo de Rentabilidad</div>
+    <div class="g2" style="margin-bottom:10px">
+      <div><label class="lbl">Precio de compra (€)</label><input type="number" id="tir-compra" value="1000" oninput="calcTIR()"/></div>
+      <div><label class="lbl">Precio de venta (€)</label><input type="number" id="tir-venta" value="1350" oninput="calcTIR()"/></div>
+      <div><label class="lbl">Fecha de compra</label><input type="date" id="tir-fcompra" value="${new Date(Date.now()-365*2*86400000).toISOString().slice(0,10)}" oninput="calcTIR()"/></div>
+      <div><label class="lbl">Fecha de venta</label><input type="date" id="tir-fventa" value="${new Date().toISOString().slice(0,10)}" oninput="calcTIR()"/></div>
+    </div>
+    <div id="tir-result" style="background:var(--bg3);border-radius:10px;padding:12px"></div>
+  </div>
+  </div>`;
+}
+
+function calcIC(){
+  const cap=+document.getElementById('ci-cap')?.value||0;
+  const aport=+document.getElementById('ci-aport')?.value||0;
+  const rent=+document.getElementById('ci-rent')?.value||0;
+  const años=+document.getElementById('ci-años')?.value||0;
+  if(!años){return;}
+  const rm=Math.pow(1+rent/100,1/12)-1;
+  const n=años*12;
+  const fv=cap*Math.pow(1+rm,n)+(rm>0?aport*(Math.pow(1+rm,n)-1)/rm:aport*n);
+  const aportado=cap+aport*n;
+  const ganancia=fv-aportado;
+  const el=document.getElementById('ci-result');
+  if(el) el.innerHTML=`<div class="g3">
+    <div><div style="font-size:10px;color:var(--text2);margin-bottom:3px">CAPITAL FINAL</div><div style="font-size:18px;font-weight:800;color:var(--green)">${fE(Math.round(fv))}</div></div>
+    <div><div style="font-size:10px;color:var(--text2);margin-bottom:3px">APORTADO</div><div style="font-size:16px;font-weight:700;color:var(--blue)">${fE(Math.round(aportado))}</div></div>
+    <div><div style="font-size:10px;color:var(--text2);margin-bottom:3px">INTERESES</div><div style="font-size:16px;font-weight:700;color:var(--gold)">${fE(Math.round(ganancia))}</div></div>
+  </div>
+  <div style="margin-top:8px;font-size:11px;color:var(--text2)">Multiplicador: ×${(fv/Math.max(1,cap)).toFixed(1)} · Intereses = ${Math.round(ganancia/Math.max(1,aportado)*100)}% del capital aportado</div>`;
+}
+
+function calcR72(){
+  const rent=+document.getElementById('r72-rent')?.value||0;
+  const años=rent>0?(72/rent):null;
+  const el=document.getElementById('r72-result');
+  if(el&&años) el.innerHTML=`Con una rentabilidad del <b style="color:var(--green)">${rent}%/año</b>, tu dinero se dobla en aproximadamente <b style="color:var(--gold)">${años.toFixed(1)} años</b>.${años<=10?` A este ritmo, en 30 años ×${Math.pow(2,30/años).toFixed(0)}.`:''}`;
+}
+function calcR72r(){
+  const años=+document.getElementById('r72-años')?.value||0;
+  const rent=años>0?(72/años):null;
+  const el=document.getElementById('r72-result');
+  if(el&&rent) el.innerHTML=`Para doblar en <b style="color:var(--gold)">${años} años</b> necesitas una rentabilidad de aproximadamente <b style="color:var(--green)">${rent.toFixed(1)}%/año</b>.`;
+}
+function calcTIR(){
+  const compra=+document.getElementById('tir-compra')?.value||0;
+  const venta=+document.getElementById('tir-venta')?.value||0;
+  const fc=document.getElementById('tir-fcompra')?.value;
+  const fv=document.getElementById('tir-fventa')?.value;
+  if(!compra||!venta||!fc||!fv)return;
+  const dias=Math.max(1,Math.round((new Date(fv)-new Date(fc))/86400000));
+  const ganTotal=(venta-compra)/compra*100;
+  const tir=(Math.pow(1+(venta-compra)/compra,365/dias)-1)*100;
+  const el=document.getElementById('tir-result');
+  if(el) el.innerHTML=`<div class="g3">
+    <div><div style="font-size:10px;color:var(--text2);margin-bottom:3px">GANANCIA TOTAL</div><div style="font-size:17px;font-weight:800;color:${ganTotal>=0?'var(--green)':'var(--red)'}">${ganTotal>=0?'+':''}${ganTotal.toFixed(2)}%</div></div>
+    <div><div style="font-size:10px;color:var(--text2);margin-bottom:3px">TIR ANUALIZADA</div><div style="font-size:17px;font-weight:800;color:${tir>=0?'var(--green)':'var(--red)'}">${tir>=0?'+':''}${tir.toFixed(2)}%/año</div></div>
+    <div><div style="font-size:10px;color:var(--text2);margin-bottom:3px">DÍAS INVERSIÓN</div><div style="font-size:17px;font-weight:700;color:var(--text)">${dias}d · ${(dias/365).toFixed(1)}a</div></div>
+  </div>`;
+}
+
+function tabMercadosInner(){
+  const group=S.mGroup||'indices';
+  const items=MKT_GROUPS[group]?.items||[];
+  const techMode=S.mTechMode||false;
+  // Auto-fetch on first render
+  if(items.some(i=>!MKT_CACHE[i.sym])) setTimeout(()=>mktFetchGroup(group),60);
+
+  const fmtPrice=(sym)=>{
+    const d=MKT_CACHE[sym];
+    if(MKT_LOADING.has(sym)) return '<span style="color:var(--text2);font-size:11px">⏳</span>';
+    if(!d) return '<span style="color:var(--text2);font-size:11px">—</span>';
+    const pr=d.price>9999?d.price.toLocaleString('es-ES',{maximumFractionDigits:0}):
+              d.price>99?d.price.toFixed(2):d.price.toFixed(3);
+    const pStr=d.pct!=null
+      ?` <span style="font-size:11px;color:${d.pct>=0?'var(--green)':'var(--red)'}">${d.pct>=0?'+':''}${d.pct.toFixed(2)}%</span>`
+      :'';
+    return `<span style="font-weight:700;font-family:monospace">${pr}</span>${pStr}`;
+  };
+
+  const fmtTech=(sym)=>{
+    const ts=calcTechSignal(sym,'d1');
+    if(!ts) return '<span style="color:var(--text2);font-size:11px">—</span>';
+    return `<span style="font-size:11px;font-weight:700;color:${ts.color}">${ts.label}</span>`;
+  };
+
+  return `<div>
+  <!-- Group pills + refresh + tech toggle -->
+  <div style="display:flex;gap:5px;margin-bottom:10px;overflow-x:auto;scrollbar-width:none;align-items:center">
+    <div style="display:flex;gap:4px;flex:1;overflow-x:auto;scrollbar-width:none">
+      ${Object.entries(MKT_GROUPS).map(([k,g])=>`<button class="${group===k?'ba':'bo'}" onclick="set({mGroup:'${k}',mTechMode:false})" style="flex-shrink:0;padding:5px 9px;font-size:11px">${g.ico} ${g.label}</button>`).join('')}
+    </div>
+    <button class="${techMode?'ba':'bo'}" onclick="set({mTechMode:${!techMode}})" style="flex-shrink:0;padding:5px 10px;font-size:11px;font-weight:700" title="Vista técnica">🔬${techMode?' ON':''}</button>
+    <button class="bo" onclick="mktFetchGroup('${group}')" style="flex-shrink:0;padding:5px 9px;font-size:12px">🔄</button>
+  </div>
+
+  <!-- Activos list — click name → chart, ⭐ → watchlist -->
+  <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--r);overflow:hidden;margin-bottom:10px">
+    ${items.map((item,i)=>{
+      const hasMembers=!!IDX_MEMBERS[item.sym];
+      const isInWL=(S.user?.watchlists||[{items:S.user?.watchlist||[]}]).some(wl=>(wl.items||[]).some(w=>w.sym===item.sym));
+      return `<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border-bottom:${i<items.length-1?'1px solid rgba(74,53,32,.25)':'none'}">
+        <!-- Name: clickable → chart -->
+        <div onclick="openStockChart('${item.sym}','${item.n}')" style="cursor:pointer;flex:1;min-width:0;padding-right:8px" onmouseover="this.parentElement.style.background='rgba(210,138,63,.04)'" onmouseout="this.parentElement.style.background=''">
+          <div style="font-weight:600;font-size:13px">${item.n}${item.cat?` <span style="font-size:10px;color:var(--text2)">${item.cat}</span>`:''}</div>
+          ${hasMembers?`<div style="font-size:9px;color:var(--text2)">📋 ver miembros al abrir</div>`:''}
+        </div>
+        <!-- Price / tech -->
+        <div style="text-align:right;flex-shrink:0;margin-right:8px">
+          ${techMode?fmtTech(item.sym):fmtPrice(item.sym)}
+        </div>
+        <!-- Star -->
+        <button onclick="event.stopPropagation();addToWatchlistModal('${item.sym}','${item.n}')" style="background:${isInWL?'rgba(210,138,63,.2)':'var(--bg3)'};border:1px solid ${isInWL?'var(--gold)':'var(--border)'};border-radius:6px;padding:4px 7px;font-size:13px;cursor:pointer;flex-shrink:0" title="Añadir a Watchlist">${isInWL?'⭐':'☆'}</button>
       </div>`;
-  } else if(summary){
-    summary.style.display='none';
-  }
+    }).join('')}
+  </div>
+  <div style="font-size:9px;color:var(--text2);text-align:center;padding:4px 0">
+    ⏱ Datos con retraso 15-20 min · Toca el nombre para ver gráfico · 🔬 activa vista técnica arriba
+  </div>
+  </div>`;
 }
 
-function saveLoan(){
-  const nombre=document.getElementById('ln')?.value.trim();
-  if(!nombre){ntf('Introduce el nombre');return;}
-  const capital=+document.getElementById('lca')?.value||0;
-  const pendiente=+document.getElementById('lpe')?.value||capital;
-  const tipo=+document.getElementById('lin')?.value||0;
-  const plazoAnios=+document.getElementById('lplazo')?.value||0;
-  const plazoMeses=Math.round(plazoAnios*12);
-  const cuotaManual=+document.getElementById('lcu')?.value||0;
-  // Auto-calculate if not entered
-  const cuota=cuotaManual>0 ? cuotaManual : calcCuotaFrances(pendiente||capital, tipo, plazoMeses);
-  const inicio=document.getElementById('li')?.value||'';
-  let fin=document.getElementById('lf')?.value||'';
-  if(!fin&&inicio&&plazoMeses){const d=new Date(inicio);d.setMonth(d.getMonth()+plazoMeses);fin=d.toISOString().slice(0,10);}
-  const nl={id:Date.now(),nombre,titularId:document.getElementById('lt')?.value||'',capital,pendiente,cuota:Math.round(cuota*100)/100,tipo,plazoMeses,inicio,fin,tipoP:document.getElementById('ltp')?.value||'prestamo'};
-  const u2={...S.user,loans:[...(S.user.loans||[]),nl]};
-  persist(u2);closeModal();set({user:u2});ntf(`Préstamo añadido — cuota ${f2(nl.cuota)} €/mes`);
+// ─── WATCHLIST INNER ───────────────────────────────────────────────────────────
+function tabWatchlistInner(){
+  const wls=getWatchlists();
+  const activeWL=getActiveWL();
+  const items=activeWL.items||[];
+  if(items.length&&!items.every(i=>MKT_CACHE[i.sym])) setTimeout(()=>mktFetchWatchlist(),80);
+
+  const fmtWL=(sym)=>{
+    const d=MKT_CACHE[sym];
+    if(MKT_LOADING.has(sym)) return '⏳';
+    if(!d) return '—';
+    const pr=d.price>999?d.price.toLocaleString('es-ES',{maximumFractionDigits:0}):d.price.toFixed(2);
+    const pStr=d.pct!=null?`<span style="color:${d.pct>=0?'var(--green)':'var(--red)'};font-family:monospace"> ${d.pct>=0?'+':''}${d.pct.toFixed(2)}%</span>`:'';
+    return `<span style="font-weight:700;font-family:monospace">${pr}</span>${pStr}`;
+  };
+
+  return `<div>
+  <!-- WL selector + new -->
+  <div style="display:flex;gap:6px;margin-bottom:10px;overflow-x:auto;scrollbar-width:none;padding-bottom:2px">
+    ${wls.map(w=>`<button class="${w.id===activeWL.id?'ba':'bo'}" onclick="set({mWLid:'${w.id}'})" style="flex-shrink:0;padding:6px 11px;font-size:11px;font-weight:700">${w.name} <span style="opacity:.7;font-size:10px">${(w.items||[]).length}</span></button>`).join('')}
+    <button class="bo" onclick="openCreateWL()" style="flex-shrink:0;padding:6px 10px;font-size:11px">+ Nueva</button>
+  </div>
+  <!-- Add ticker -->
+  <div style="display:flex;gap:7px;margin-bottom:12px">
+    <input id="wl-input" placeholder="Ticker (AAPL, ITX.MC, BTC-EUR...)" style="flex:1;font-size:13px"/>
+    <button class="ba" onclick="addWlItem()" style="white-space:nowrap;padding:8px 12px;font-size:12px">+ Añadir</button>
+    <button class="bo" onclick="mktFetchWatchlist();render()" style="padding:8px 10px;font-size:12px">🔄</button>
+  </div>
+  ${items.length===0?`<div style="text-align:center;color:var(--text2);padding:32px;font-size:13px">
+    <div style="font-size:32px;margin-bottom:8px">⭐</div>
+    Esta watchlist está vacía.<br>
+    <span style="font-size:11px">Añade tickers o pulsa ⭐ en cualquier activo</span>
+  </div>`:`
+  <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--r);overflow:hidden">
+    ${items.map((w,i)=>`
+      <div onclick="openStockChart('${w.sym}','${escH(w.name)}')" style="display:flex;justify-content:space-between;align-items:center;padding:10px 13px;border-bottom:${i<items.length-1?'1px solid rgba(74,53,32,.28)':'none'};cursor:pointer;transition:background .12s" onmouseover="this.style.background='rgba(210,138,63,.05)'" onmouseout="this.style.background=''">
+        <div>
+          <div style="font-weight:700;font-size:13px;color:var(--gold)">${escH(w.sym)}</div>
+          <div style="font-size:10px;color:var(--text2)">${escH(w.name)}</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <div style="text-align:right">${fmtWL(w.sym)}</div>
+          <button class="bd" onclick="event.stopPropagation();removeFromWatchlist('${w.sym}')" style="padding:3px 7px;font-size:11px">✕</button>
+        </div>
+      </div>`).join('')}
+  </div>`}
+  </div>`;
 }
 
-// ─── NORMAL DISTRIBUTION CHART ───────────────────────────────────────────────
-// Renders a bell curve for a given (mean, std) with key percentile markers
-function renderNormalDist(mean, std, label, color, yearLabel){
-  const W=340, H=130, pl=10, pr=10, pt=16, pb=28;
-  const iW=W-pl-pr, iH=H-pt-pb;
-  // Show ±3σ range
-  const xMin=mean-3.2*std, xMax=mean+3.2*std;
-  const xRange=xMax-xMin;
-  const px=v=>pl+iW*(v-xMin)/xRange;
+function openCreateWL(){
+  const body=`<div>
+    <label class="lbl">Nombre de la nueva watchlist</label>
+    <input id="new-wl-n" placeholder="Ej: Tecnología, Ibex, Radar..." style="margin-bottom:12px"/>
+  </div>`;
+  openModal('Nueva Watchlist',body,'createWL()','Crear');
+}
+function createWL(){
+  const n=document.getElementById('new-wl-n')?.value.trim();
+  if(!n){ntf('Introduce un nombre');return;}
+  const u2=JSON.parse(JSON.stringify(S.user));
+  if(!u2.watchlists) u2.watchlists=[{id:'wl1',name:'Principal',items:u2.watchlist||[]}];
+  const newId='wl'+Date.now();
+  u2.watchlists.push({id:newId,name:n,items:[]});
+  persist(u2);closeModal();set({user:u2,mWLid:newId});ntf(`Watchlist "${n}" creada`);
+}
 
-  // Normal PDF
-  const pdf=v=>Math.exp(-0.5*Math.pow((v-mean)/std,2))/(std*Math.sqrt(2*Math.PI));
-  const pdfMax=pdf(mean);
-  const py=v=>pt+iH*(1-v/pdfMax);
 
-  // Build curve points (200 samples)
-  const nPts=200;
-  const curvePts=Array.from({length:nPts+1},(_,i)=>{
-    const v=xMin+i*xRange/nPts;
-    return{x:px(v).toFixed(1), y:py(pdf(v)).toFixed(1), v};
-  });
 
-  // Key percentiles for a normal distribution
-  const pcts=[
-    {z:-2,  pct: 2.3,  label:'2.3%'},
-    {z:-1,  pct:15.9,  label:'16%'},
-    {z: 0,  pct:50,    label:'50%'},
-    {z: 1,  pct:84.1,  label:'84%'},
-    {z: 2,  pct:97.7,  label:'97.7%'},
-  ];
 
-  // Shaded regions
-  function shadedArea(zLo, zHi, fill){
-    const vLo=mean+zLo*std, vHi=mean+zHi*std;
-    const pts=curvePts.filter(p=>p.v>=vLo&&p.v<=vHi);
-    if(pts.length<2) return '';
-    const base=py(0).toFixed(1);
-    const path=`M${pts[0].x},${pts[0].y} `+pts.slice(1).map(p=>`L${p.x},${p.y}`).join(' ')
-      +` L${pts[pts.length-1].x},${base} L${pts[0].x},${base} Z`;
-    return `<path d="${path}" fill="${fill}" stroke="none"/>`;
-  }
+const SCREENER_DB=[
+  // ── US Tech ──────────────────────────────────────────────────────────────────
+  {n:'Apple',          t:'AAPL',  geo:'US', cap:3400,capL:'$3.4T', roic:42, mop:30.7, per:32,  eveb:24,  crec:7,   sector:'Tech',     d:0.3, w:1.2, m:-4.1, y:14.2},
+  {n:'Microsoft',      t:'MSFT',  geo:'US', cap:3100,capL:'$3.1T', roic:38, mop:42.1, per:34,  eveb:26,  crec:16,  sector:'Tech',     d:0.5, w:0.8, m:-3.2, y:8.4},
+  {n:'NVIDIA',         t:'NVDA',  geo:'US', cap:2100,capL:'$2.1T', roic:55, mop:55.3, per:40,  eveb:30,  crec:122, sector:'Tech',     d:-1.2,w:-3.4,m:-18.6,y:42.1},
+  {n:'Alphabet',       t:'GOOGL', geo:'US', cap:2000,capL:'$2.0T', roic:28, mop:31.6, per:22,  eveb:14,  crec:11,  sector:'Tech',     d:0.4, w:1.1, m:-5.8, y:3.2},
+  {n:'Amazon',         t:'AMZN',  geo:'US', cap:1900,capL:'$1.9T', roic:18, mop:9.3,  per:38,  eveb:16,  crec:11,  sector:'Consumer', d:0.2, w:0.9, m:-8.2, y:6.1},
+  {n:'Meta Platforms', t:'META',  geo:'US', cap:1500,capL:'$1.5T', roic:34, mop:38.1, per:26,  eveb:17,  crec:22,  sector:'Tech',     d:0.8, w:2.1, m:-2.4, y:22.3},
+  {n:'Tesla',          t:'TSLA',  geo:'US', cap:800, capL:'$800B', roic:9,  mop:9.2,  per:85,  eveb:42,  crec:2,   sector:'EV',       d:-2.4,w:-4.8,m:-32.1,y:-38.4},
+  {n:'Broadcom',       t:'AVGO',  geo:'US', cap:780, capL:'$780B', roic:21, mop:58.3, per:29,  eveb:22,  crec:44,  sector:'Tech',     d:0.6, w:1.4, m:-6.4, y:18.2},
+  {n:'JPMorgan Chase', t:'JPM',   geo:'US', cap:720, capL:'$720B', roic:16, mop:38.2, per:12,  eveb:null,crec:12,  sector:'Banca',    d:0.3, w:0.8, m:-2.1, y:24.6},
+  {n:'Visa',           t:'V',     geo:'US', cap:590, capL:'$590B', roic:44, mop:67.1, per:28,  eveb:21,  crec:10,  sector:'Finance',  d:0.1, w:0.6, m:-1.8, y:12.4},
+  {n:'Johnson & Johnson',t:'JNJ', geo:'US', cap:380, capL:'$380B', roic:24, mop:22.8, per:15,  eveb:12,  crec:4,   sector:'Salud',    d:-0.2,w:0.4, m:1.2,  y:3.8},
+  {n:'UnitedHealth',   t:'UNH',   geo:'US', cap:460, capL:'$460B', roic:18, mop:8.4,  per:22,  eveb:15,  crec:8,   sector:'Salud',    d:-3.8,w:-8.2,m:-22.4,y:-18.6},
+  {n:'Berkshire Hath.',t:'BRK-B', geo:'US', cap:1100,capL:'$1.1T', roic:10, mop:null, per:14,  eveb:null,crec:5,   sector:'Finance',  d:0.4, w:1.8, m:2.4,  y:18.4},
+  {n:'ExxonMobil',     t:'XOM',   geo:'US', cap:480, capL:'$480B', roic:18, mop:16.2, per:13,  eveb:8,   crec:-4,  sector:'Energía',  d:0.8, w:1.2, m:4.8,  y:6.2},
+  {n:'Procter & Gamble',t:'PG',   geo:'US', cap:370, capL:'$370B', roic:28, mop:19.8, per:26,  eveb:18,  crec:3,   sector:'Consumo',  d:0.1, w:0.3, m:-0.8, y:8.4},
+  // ── US Mid-Small ─────────────────────────────────────────────────────────────
+  {n:'Palantir',       t:'PLTR',  geo:'US', cap:290, capL:'$290B', roic:8,  mop:14.2, per:480, eveb:null,crec:29,  sector:'Tech',     d:2.4, w:4.8, m:-18.4,y:62.4},
+  {n:'CrowdStrike',    t:'CRWD',  geo:'US', cap:82,  capL:'$82B',  roic:12, mop:2.4,  per:null,eveb:null,crec:25,  sector:'Tech',     d:1.2, w:2.4, m:-12.4,y:24.2},
+  {n:'Cloudflare',     t:'NET',   geo:'US', cap:32,  capL:'$32B',  roic:-4, mop:-2.8, per:null,eveb:null,crec:28,  sector:'Tech',     d:0.8, w:1.6, m:-8.2, y:2.4},
+  {n:'EverQuote',      t:'EVER',  geo:'US', cap:1,   capL:'$980M', roic:8,  mop:4.2,  per:45,  eveb:22,  crec:41,  sector:'InsurTech',d:1.8, w:4.6, m:12.3, y:41.0},
+  // ── US Quantum/Photonics ─────────────────────────────────────────────────────
+  {n:'IonQ',           t:'IONQ',  geo:'US', cap:10,  capL:'$9.8B', roic:-28,mop:-62,  per:null,eveb:null,crec:95,  sector:'Quantum',  d:20.1,w:18.3,m:-12.4,y:55.6},
+  {n:'D-Wave Quantum', t:'QBTS',  geo:'US', cap:3,   capL:'$3.2B', roic:-35,mop:-80,  per:null,eveb:null,crec:60,  sector:'Quantum',  d:14.4,w:12.8,m:-8.6, y:458.0},
+  {n:'Rigetti Computing',t:'RGTI',geo:'US', cap:2,   capL:'$1.9B', roic:-42,mop:-110, per:null,eveb:null,crec:40,  sector:'Quantum',  d:4.98,w:9.2, m:-15.3,y:545.0},
+  {n:'POET Technologies',t:'POET',geo:'US', cap:1,   capL:'$920M', roic:-45,mop:-88,  per:null,eveb:null,crec:80,  sector:'Photonics',d:5.9, w:8.4, m:22.4, y:94.4},
+  // ── EU Blue Chip ─────────────────────────────────────────────────────────────
+  {n:'ASML Holding',   t:'ASML',  geo:'EU', cap:280, capL:'$280B', roic:45, mop:32.4, per:34,  eveb:22,  crec:14,  sector:'Semis',    d:0.6, w:1.2, m:-8.4, y:8.4},
+  {n:'SAP SE',         t:'SAP',   geo:'EU', cap:240, capL:'$240B', roic:22, mop:22.8, per:40,  eveb:24,  crec:8,   sector:'Software', d:0.4, w:0.8, m:-2.4, y:18.6},
+  {n:'LVMH',           t:'MC.PA', geo:'EU', cap:285, capL:'$285B', roic:19, mop:26.1, per:18,  eveb:12,  crec:5,   sector:'Luxury',   d:-0.8,w:-1.2,m:-4.8, y:-12.4},
+  {n:'Novo Nordisk',   t:'NVO',   geo:'EU', cap:420, capL:'$420B', roic:42, mop:34.8, per:22,  eveb:16,  crec:22,  sector:'Salud',    d:-0.4,w:-0.8,m:-6.4, y:-28.4},
+  {n:'Hermès',         t:'RMS.PA',geo:'EU', cap:220, capL:'$220B', roic:28, mop:42.1, per:52,  eveb:34,  crec:12,  sector:'Luxury',   d:0.2, w:0.6, m:-2.4, y:4.8},
+  {n:'Siemens',        t:'SIE.DE',geo:'EU', cap:130, capL:'$130B', roic:14, mop:10.8, per:18,  eveb:12,  crec:8,   sector:'Industrial',d:0.4,w:0.8,m:-2.1, y:12.4},
+  {n:'Schneider Elec.',t:'SU.PA', geo:'EU', cap:115, capL:'$115B', roic:16, mop:16.4, per:24,  eveb:16,  crec:10,  sector:'Industrial',d:0.6,w:1.2,m:-1.8, y:18.4},
+  {n:'AstraZeneca',    t:'AZN',   geo:'EU', cap:240, capL:'$240B', roic:14, mop:20.4, per:18,  eveb:12,  crec:18,  sector:'Salud',    d:0.8, w:1.4, m:2.4,  y:6.4},
+  // ── España ───────────────────────────────────────────────────────────────────
+  {n:'Inditex',        t:'ITX.MC',geo:'ES', cap:135, capL:'$135B', roic:35, mop:22.4, per:24,  eveb:16,  crec:10,  sector:'Retail',   d:0.4, w:0.8, m:-1.2, y:8.4},
+  {n:'Santander',      t:'SAN.MC',geo:'ES', cap:80,  capL:'$80B',  roic:12, mop:34.0, per:7,   eveb:null,crec:8,   sector:'Banca',    d:0.6, w:1.4, m:2.8,  y:32.4},
+  {n:'BBVA',           t:'BBVA.MC',geo:'ES',cap:75,  capL:'$75B',  roic:13, mop:36.2, per:8,   eveb:null,crec:9,   sector:'Banca',    d:0.8, w:2.1, m:4.2,  y:44.8},
+  {n:'Iberdrola',      t:'IBE.MC', geo:'ES',cap:85,  capL:'$85B',  roic:8,  mop:18.6, per:20,  eveb:14,  crec:7,   sector:'Utilities',d:0.2, w:0.6, m:1.8,  y:12.4},
+  {n:'Ferrovial',      t:'FER.MC', geo:'ES',cap:42,  capL:'$42B',  roic:10, mop:12.4, per:28,  eveb:18,  crec:6,   sector:'Infra',    d:0.4, w:0.8, m:-0.8, y:8.4},
+  {n:'CaixaBank',      t:'CABK.MC',geo:'ES',cap:48,  capL:'$48B',  roic:11, mop:30.2, per:9,   eveb:null,crec:7,   sector:'Banca',    d:0.6, w:1.2, m:3.4,  y:28.4},
+  {n:'Amadeus IT',     t:'AMS.MC', geo:'ES',cap:28,  capL:'$28B',  roic:28, mop:22.8, per:26,  eveb:18,  crec:12,  sector:'Tech',     d:0.2, w:0.4, m:-2.4, y:4.8},
+  {n:'Repsol',         t:'REP.MC', geo:'ES',cap:14,  capL:'$14B',  roic:12, mop:8.4,  per:6,   eveb:4,   crec:-2,  sector:'Energía',  d:1.2, w:2.4, m:4.8,  y:-4.8},
+  {n:'Telefónica',     t:'TEF.MC', geo:'ES',cap:22,  capL:'$22B',  roic:6,  mop:14.2, per:12,  eveb:8,   crec:2,   sector:'Telecom',  d:0.4, w:0.8, m:1.2,  y:4.8},
+  // ── EV / Auto ────────────────────────────────────────────────────────────────
+  {n:'Lucid Group',    t:'LCID',   geo:'US',cap:3,   capL:'$2.9B', roic:-55,mop:-180, per:null,eveb:null,crec:-30, sector:'EV',       d:12.0,w:8.4, m:-18.6,y:-68.0},
+  {n:'Rivian',         t:'RIVN',   geo:'US',cap:20,  capL:'$19.8B',roic:-28,mop:-80,  per:null,eveb:null,crec:8,   sector:'EV',       d:1.7, w:1.6, m:-8.2, y:-18.0},
+  {n:'ChargePoint',    t:'CHPT',   geo:'US',cap:0.15,capL:'$153M', roic:-22,mop:-42,  per:null,eveb:null,crec:-2,  sector:'EV',       d:9.0, w:6.5, m:-18.4,y:-64.0},
+  // ── Fondos / ETFs referencia ─────────────────────────────────────────────────
+  {n:'Vanguard S&P 500',t:'VOO',   geo:'US',cap:null,capL:'ETF',   roic:null,mop:null,per:null,eveb:null,crec:null,sector:'ETF',      d:0.3, w:0.8, m:-4.2, y:8.4},
+  {n:'iShares MSCI World',t:'IWDA',geo:'EU',cap:null,capL:'ETF',   roic:null,mop:null,per:null,eveb:null,crec:null,sector:'ETF',      d:0.2, w:0.6, m:-3.8, y:6.2},
+  {n:'Invesco QQQ',    t:'QQQ',    geo:'US',cap:null,capL:'ETF',   roic:null,mop:null,per:null,eveb:null,crec:null,sector:'ETF',      d:0.4, w:1.1, m:-6.8, y:4.8},
+];
 
-  const fmtV=v=>v>=1000000?(v/1000000).toFixed(1)+'M':(v>=1000?(v/1000).toFixed(0)+'k':Math.round(v)+'');
+let SCR={geo:'',sector:'',sort:'cap',q:'',techMin:'',perfPeriod:'m',perfMin:'',roicMin:'',perMax:'',crecMin:''};
 
-  let s=`<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto;display:block">`;
-  s+=`<text x="${W/2}" y="11" text-anchor="middle" fill="${color}" font-size="10" font-weight="700">${label} · ${yearLabel}</text>`;
+function tabScreenerInner(){
+  const sectors=[...new Set(SCREENER_DB.map(s=>s.sector))].sort();
+  const geos=[...new Set(SCREENER_DB.map(s=>s.geo))].sort();
 
-  // Shaded areas: ±1σ darker, ±2σ lighter, ±3σ lightest
-  s+=shadedArea(-3.2, 3.2, color+'18');
-  s+=shadedArea(-2, 2, color+'28');
-  s+=shadedArea(-1, 1, color+'45');
-
-  // Curve line
-  const linePath=`M${curvePts[0].x},${curvePts[0].y} `+curvePts.slice(1).map(p=>`L${p.x},${p.y}`).join(' ');
-  s+=`<path d="${linePath}" fill="none" stroke="${color}" stroke-width="2"/>`;
-
-  // Vertical lines at σ markers with labels
-  [-2,-1,0,1,2].forEach(z=>{
-    const v=mean+z*std;
-    const x=px(v);
-    const yTop=pt;
-    const yBot=pt+iH;
-    const dash=z===0?'':'4,3';
-    s+=`<line x1="${x.toFixed(1)}" y1="${yTop}" x2="${x.toFixed(1)}" y2="${yBot}" stroke="${z===0?color:'rgba(200,180,160,.5)'}" stroke-width="${z===0?1.5:1}" stroke-dasharray="${dash}"/>`;
-    // Value label at bottom
-    s+=`<text x="${x.toFixed(1)}" y="${(H-pb+14).toFixed(1)}" text-anchor="middle" fill="${z===0?color:'#a8927a'}" font-size="9" font-weight="${z===0?700:400}">${fmtV(v)}</text>`;
-    // σ label
-    if(z!==0){
-      const sl=z<0?z+'σ':'+'+z+'σ';
-      s+=`<text x="${x.toFixed(1)}" y="${(pt+9).toFixed(1)}" text-anchor="middle" fill="#a8927a" font-size="8">${sl}</text>`;
+  let list=SCREENER_DB.filter(s=>{
+    if(SCR.geo&&s.geo!==SCR.geo) return false;
+    if(SCR.sector&&s.sector!==SCR.sector) return false;
+    if(SCR.q){const ql=SCR.q.toLowerCase();if(!s.n.toLowerCase().includes(ql)&&!s.t.toLowerCase().includes(ql))return false;}
+    // Fundamentals filters
+    if(SCR.roicMin!==''&&(s.roic==null||s.roic<+SCR.roicMin)) return false;
+    if(SCR.perMax!==''&&s.per!=null&&s.per>+SCR.perMax) return false;
+    if(SCR.crecMin!==''&&(s.crec==null||s.crec<+SCR.crecMin)) return false;
+    // Performance filter
+    const pv={d:s.d,w:s.w,m:s.m,y:s.y}[SCR.perfPeriod]??null;
+    if(SCR.perfMin!==''&&(pv==null||pv<+SCR.perfMin)) return false;
+    // Tech signal filter
+    if(SCR.techMin){
+      const ts=calcTechSignal(s.t,'d1');
+      const sigMap={STRONG_BUY:2,BUY:1,NEUTRAL:0,SELL:-1,STRONG_SELL:-2};
+      const minMap={'STRONG_BUY':2,'BUY':1,'NEUTRAL':0,'SELL':-1};
+      if(!ts||sigMap[ts.signal]<(minMap[SCR.techMin]??-99)) return false;
     }
+    return true;
   });
 
-  // Probability annotations
-  // P(dentro de ±1σ) = 68.3%
-  const x1lo=px(mean-std), x1hi=px(mean+std), xMid=(x1lo+x1hi)/2;
-  s+=`<text x="${xMid.toFixed(1)}" y="${(pt+iH/2-4).toFixed(1)}" text-anchor="middle" fill="${color}" font-size="9" font-weight="700">68.3%</text>`;
+  if(SCR.sort==='cap')  list.sort((a,b)=>(b.cap||0)-(a.cap||0));
+  else if(SCR.sort==='roic') list.sort((a,b)=>(b.roic??-999)-(a.roic??-999));
+  else if(SCR.sort==='crec') list.sort((a,b)=>(b.crec??-999)-(a.crec??-999));
+  else if(SCR.sort==='per')  list.sort((a,b)=>(a.per??9999)-(b.per??9999));
+  else if(SCR.sort==='perf'){
+    list.sort((a,b)=>{
+      const av={d:a.d,w:a.w,m:a.m,y:a.y}[SCR.perfPeriod]??-999;
+      const bv={d:b.d,w:b.w,m:b.m,y:b.y}[SCR.perfPeriod]??-999;
+      return bv-av;
+    });
+  }
 
-  // X axis line
-  s+=`<line x1="${pl}" y1="${(pt+iH).toFixed(1)}" x2="${W-pr}" y2="${(pt+iH).toFixed(1)}" stroke="rgba(74,53,32,.4)" stroke-width="1"/>`;
+  const colFn=(v,good,bad)=>{
+    if(v==null) return 'var(--text2)';
+    return v>=good?'var(--green)':v<=bad?'var(--red)':'var(--gold)';
+  };
+  const pctCell=(v)=>v==null?'<span style="color:var(--text2)">—</span>':`<span style="color:${v>=0?'var(--green)':'var(--red)'}; font-family:monospace">${v>=0?'+':''}${v.toFixed(1)}%</span>`;
 
-  // Median label
-  s+=`<text x="${px(mean).toFixed(1)}" y="${(H-pb+26).toFixed(1)}" text-anchor="middle" fill="${color}" font-size="9" font-weight="700">Media: ${fmtV(mean)}</text>`;
-
-  return s+'</svg>';
+  return `<div>
+  <!-- Search row -->
+  <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap">
+    <input id="scr-q" placeholder="Empresa o ticker..." value="${SCR.q}" oninput="SCR.q=this.value;render()" style="flex:1;min-width:100px;font-size:12px"/>
+    <select onchange="SCR.geo=this.value;render()" style="font-size:11px;width:auto">
+      <option value="">🌍 Todos</option>
+      ${geos.map(g=>`<option value="${g}" ${SCR.geo===g?'selected':''}>${g}</option>`).join('')}
+    </select>
+    <select onchange="SCR.sector=this.value;render()" style="font-size:11px;width:auto">
+      <option value="">📂 Sector</option>
+      ${sectors.map(s=>`<option value="${s}" ${SCR.sector===s?'selected':''}>${s}</option>`).join('')}
+    </select>
+  </div>
+  <!-- Filter row -->
+  <div style="background:var(--bg3);border:1px solid var(--border);border-radius:9px;padding:10px 12px;margin-bottom:10px">
+    <div style="font-size:10px;color:var(--gold);font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">Filtros</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
+      <!-- Fundamentales -->
+      <div style="flex:1;min-width:80px">
+        <div style="font-size:9px;color:var(--text2);margin-bottom:3px">ROIC% mín</div>
+        <input type="number" placeholder="Ej: 10" value="${SCR.roicMin}" oninput="SCR.roicMin=this.value;render()" style="font-size:11px;padding:5px 8px"/>
+      </div>
+      <div style="flex:1;min-width:80px">
+        <div style="font-size:9px;color:var(--text2);margin-bottom:3px">PER máx</div>
+        <input type="number" placeholder="Ej: 30" value="${SCR.perMax}" oninput="SCR.perMax=this.value;render()" style="font-size:11px;padding:5px 8px"/>
+      </div>
+      <div style="flex:1;min-width:80px">
+        <div style="font-size:9px;color:var(--text2);margin-bottom:3px">Crec.% mín</div>
+        <input type="number" placeholder="Ej: 10" value="${SCR.crecMin}" oninput="SCR.crecMin=this.value;render()" style="font-size:11px;padding:5px 8px"/>
+      </div>
+      <!-- Técnico -->
+      <div style="flex:1;min-width:100px">
+        <div style="font-size:9px;color:var(--text2);margin-bottom:3px">Señal técnica mín</div>
+        <select onchange="SCR.techMin=this.value;render()" style="font-size:11px;padding:5px 6px">
+          <option value="">Cualquiera</option>
+          <option value="NEUTRAL"   ${SCR.techMin==='NEUTRAL'?'selected':''}>Neutral+</option>
+          <option value="BUY"       ${SCR.techMin==='BUY'?'selected':''}>Compra+</option>
+          <option value="STRONG_BUY"${SCR.techMin==='STRONG_BUY'?'selected':''}>Compra Fuerte</option>
+        </select>
+      </div>
+      <!-- Performance -->
+      <div style="flex:1;min-width:80px">
+        <div style="font-size:9px;color:var(--text2);margin-bottom:3px">Performance</div>
+        <select onchange="SCR.perfPeriod=this.value;render()" style="font-size:11px;padding:5px 6px">
+          <option value="d"  ${SCR.perfPeriod==='d'?'selected':''}>1D</option>
+          <option value="w"  ${SCR.perfPeriod==='w'?'selected':''}>1S</option>
+          <option value="m"  ${SCR.perfPeriod==='m'?'selected':''}>1M</option>
+          <option value="y"  ${SCR.perfPeriod==='y'?'selected':''}>1A</option>
+        </select>
+      </div>
+      <div style="flex:1;min-width:70px">
+        <div style="font-size:9px;color:var(--text2);margin-bottom:3px">% mín</div>
+        <input type="number" placeholder="Ej: 5" value="${SCR.perfMin}" oninput="SCR.perfMin=this.value;render()" style="font-size:11px;padding:5px 8px"/>
+      </div>
+      <!-- Sort + Reset -->
+      <div style="flex:1;min-width:90px">
+        <div style="font-size:9px;color:var(--text2);margin-bottom:3px">Ordenar por</div>
+        <select onchange="SCR.sort=this.value;render()" style="font-size:11px;padding:5px 6px">
+          <option value="cap"  ${SCR.sort==='cap'?'selected':''}>Cap. Bursátil</option>
+          <option value="roic" ${SCR.sort==='roic'?'selected':''}>ROIC%</option>
+          <option value="crec" ${SCR.sort==='crec'?'selected':''}>Crecimiento</option>
+          <option value="per"  ${SCR.sort==='per'?'selected':''}>PER (menor)</option>
+          <option value="perf" ${SCR.sort==='perf'?'selected':''}>Performance</option>
+        </select>
+      </div>
+      <button class="bo" onclick="SCR={geo:'',sector:'',sort:'cap',q:'',techMin:'',perfPeriod:'m',perfMin:'',roicMin:'',perMax:'',crecMin:''};render()" style="padding:5px 8px;font-size:11px;align-self:flex-end">✕ Reset</button>
+    </div>
+  </div>
+  <!-- Results count -->
+  <div style="font-size:10px;color:var(--text2);margin-bottom:6px">${list.length} empresa${list.length!==1?'s':''} encontrada${list.length!==1?'s':''}</div>
+  <!-- Table -->
+  <div class="ov" style="margin-bottom:8px">
+    <table style="min-width:640px">
+      <thead><tr>
+        <th style="min-width:120px">Empresa</th>
+        <th>Cap</th>
+        <th title="Return on Invested Capital">ROIC%</th>
+        <th title="Margen Operativo">MOp%</th>
+        <th title="Price/Earnings">PER</th>
+        <th title="Crecimiento Ventas">Crec%</th>
+        <th>1D</th><th>1M</th><th>1A</th>
+        <th>Señal 1D</th>
+        <th></th>
+      </tr></thead>
+      <tbody>
+        ${list.map(s=>{
+          const ts=calcTechSignal(s.t,'d1');
+          const isInWL=(S.user?.watchlists||[{items:S.user?.watchlist||[]}]).some(wl=>(wl.items||[]).some(w=>w.sym===s.t));
+          return `<tr onclick="openStockChart('${s.t}','${s.n}')" style="cursor:pointer" onmouseover="this.style.background='rgba(210,138,63,.04)'" onmouseout="this.style.background=''">
+            <td>
+              <div style="font-weight:600;font-size:12px">${s.n}</div>
+              <div style="font-size:10px;color:var(--accent);font-family:monospace">${s.t} <span style="color:var(--text2)">${s.geo}</span></div>
+            </td>
+            <td style="font-size:11px;color:var(--text2);white-space:nowrap">${s.capL}</td>
+            <td style="font-weight:700;font-family:monospace;font-size:11px;color:${colFn(s.roic,15,0)}">${s.roic!=null?s.roic+'%':'—'}</td>
+            <td style="font-family:monospace;font-size:11px;color:${colFn(s.mop,15,0)}">${s.mop!=null?s.mop.toFixed(1)+'%':'—'}</td>
+            <td style="font-family:monospace;font-size:11px;color:${s.per==null?'var(--text2)':s.per<20?'var(--green)':s.per>50?'var(--red)':'var(--gold)'}">${s.per??'—'}</td>
+            <td style="font-weight:700;font-family:monospace;font-size:11px;color:${colFn(s.crec,20,0)}">${s.crec!=null?(s.crec>0?'+':'')+s.crec+'%':'—'}</td>
+            <td>${pctCell(s.d)}</td>
+            <td>${pctCell(s.m)}</td>
+            <td>${pctCell(s.y)}</td>
+            <td><span style="font-size:10px;font-weight:700;color:${ts?.color||'var(--text2)'};white-space:nowrap">${ts?.label||'—'}</span></td>
+            <td onclick="event.stopPropagation()"><button onclick="addToWatchlistModal('${s.t}','${s.n}')" style="background:${isInWL?'rgba(210,138,63,.2)':'var(--bg3)'};border:1px solid ${isInWL?'var(--gold)':'var(--border)'};border-radius:5px;padding:3px 6px;font-size:12px;cursor:pointer">${isInWL?'⭐':'☆'}</button></td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>
+  </div>
+  <div style="font-size:9px;color:var(--text2)">Toca fila para gráfico · Fundamentales orientativos · Señal técnica algorítmica · No es asesoramiento · Renta 4</div>
+  </div>`;
 }
 
-// ─── TAB PATRIMONIO ───────────────────────────────────────────────────────────
+
+
+function calcIC(){
+  const cap=+document.getElementById('ci-cap')?.value||0;
+  const aport=+document.getElementById('ci-aport')?.value||0;
+  const rent=+document.getElementById('ci-rent')?.value||0;
+  const años=+document.getElementById('ci-años')?.value||0;
+  if(!años){return;}
+  const rm=Math.pow(1+rent/100,1/12)-1;
+  const n=años*12;
+  const fv=cap*Math.pow(1+rm,n)+(rm>0?aport*(Math.pow(1+rm,n)-1)/rm:aport*n);
+  const aportado=cap+aport*n;
+  const ganancia=fv-aportado;
+  const el=document.getElementById('ci-result');
+  if(el) el.innerHTML=`<div class="g3">
+    <div><div style="font-size:10px;color:var(--text2);margin-bottom:3px">CAPITAL FINAL</div><div style="font-size:18px;font-weight:800;color:var(--green)">${fE(Math.round(fv))}</div></div>
+    <div><div style="font-size:10px;color:var(--text2);margin-bottom:3px">APORTADO</div><div style="font-size:16px;font-weight:700;color:var(--blue)">${fE(Math.round(aportado))}</div></div>
+    <div><div style="font-size:10px;color:var(--text2);margin-bottom:3px">INTERESES</div><div style="font-size:16px;font-weight:700;color:var(--gold)">${fE(Math.round(ganancia))}</div></div>
+  </div>
+  <div style="margin-top:8px;font-size:11px;color:var(--text2)">Multiplicador: ×${(fv/Math.max(1,cap)).toFixed(1)} · Intereses = ${Math.round(ganancia/Math.max(1,aportado)*100)}% del capital aportado</div>`;
+}
+
+function calcR72(){
+  const rent=+document.getElementById('r72-rent')?.value||0;
+  const años=rent>0?(72/rent):null;
+  const el=document.getElementById('r72-result');
+  if(el&&años) el.innerHTML=`Con una rentabilidad del <b style="color:var(--green)">${rent}%/año</b>, tu dinero se dobla en aproximadamente <b style="color:var(--gold)">${años.toFixed(1)} años</b>.${años<=10?` A este ritmo, en 30 años ×${Math.pow(2,30/años).toFixed(0)}.`:''}`;
+}
+function calcR72r(){
+  const años=+document.getElementById('r72-años')?.value||0;
+  const rent=años>0?(72/años):null;
+  const el=document.getElementById('r72-result');
+  if(el&&rent) el.innerHTML=`Para doblar en <b style="color:var(--gold)">${años} años</b> necesitas una rentabilidad de aproximadamente <b style="color:var(--green)">${rent.toFixed(1)}%/año</b>.`;
+}
+function calcTIR(){
+  const compra=+document.getElementById('tir-compra')?.value||0;
+  const venta=+document.getElementById('tir-venta')?.value||0;
+  const fc=document.getElementById('tir-fcompra')?.value;
+  const fv=document.getElementById('tir-fventa')?.value;
+  if(!compra||!venta||!fc||!fv)return;
+  const dias=Math.max(1,Math.round((new Date(fv)-new Date(fc))/86400000));
+  const ganTotal=(venta-compra)/compra*100;
+  const tir=(Math.pow(1+(venta-compra)/compra,365/dias)-1)*100;
+  const el=document.getElementById('tir-result');
+  if(el) el.innerHTML=`<div class="g3">
+    <div><div style="font-size:10px;color:var(--text2);margin-bottom:3px">GANANCIA TOTAL</div><div style="font-size:17px;font-weight:800;color:${ganTotal>=0?'var(--green)':'var(--red)'}">${ganTotal>=0?'+':''}${ganTotal.toFixed(2)}%</div></div>
+    <div><div style="font-size:10px;color:var(--text2);margin-bottom:3px">TIR ANUALIZADA</div><div style="font-size:17px;font-weight:800;color:${tir>=0?'var(--green)':'var(--red)'}">${tir>=0?'+':''}${tir.toFixed(2)}%/año</div></div>
+    <div><div style="font-size:10px;color:var(--text2);margin-bottom:3px">DÍAS INVERSIÓN</div><div style="font-size:17px;font-weight:700;color:var(--text)">${dias}d · ${(dias/365).toFixed(1)}a</div></div>
+  </div>`;
+}
+
 function tabPat(){
   const u=S.user;
   const profId=u.profileId||'moderado';
@@ -3939,1122 +4477,141 @@ function saveManualPrices(ids){
 }
 
 // Open consolidation modal: auto-build from current state, allow editing
-function openConsolidateMes(){
-  const u=S.user;
-  const snap=buildConsolidation(u);
-  const now=new Date();
-  const tits=u.titulares||[];
-  function titName(id){const t=tits.find(x=>x.id===id);return t?t.nombre:id||'';}
 
-  const body=`
-  <div style="background:rgba(210,138,63,.08);border:1px solid rgba(210,138,63,.2);border-radius:9px;padding:11px;margin-bottom:14px">
-    <div style="font-size:11px;color:var(--gold);font-weight:600;margin-bottom:6px">📅 CONSOLIDACIÓN A CIERRE DE MES</div>
-    <div style="font-size:12px;color:var(--text2);margin-bottom:8px">Este proceso guarda el estado completo de la cartera para el seguimiento del patrimonio real. Edita los precios de activos no cotizados antes de confirmar.</div>
-    <button class="bo" id="cs-refresh-btn" onclick="csRefreshPrices()" style="font-size:12px;padding:6px 12px">🔄 Actualizar precios cotizados antes de consolidar</button>
-  </div>
-  <div class="g2" style="margin-bottom:12px">
-    <div><label class="lbl">Año</label><select id="cs-y">${Array.from({length:CUR_YEAR-2022},(_,i)=>2023+i).concat([CUR_YEAR]).map(y=>`<option ${y===CUR_YEAR?'selected':''}>${y}</option>`).join('')}</select></div>
-    <div><label class="lbl">Mes</label><select id="cs-m">${MN.map((m,i)=>`<option value="${i}" ${i===CUR_MONTH?'selected':''}>${m}</option>`).join('')}</select></div>
-  </div>
-  <div style="margin-bottom:12px">
-    <div style="font-size:11px;color:var(--text2);margin-bottom:8px;font-weight:600;text-transform:uppercase;letter-spacing:.3px">EDITAR PRECIOS POR POSICIÓN</div>
-    <div style="max-height:300px;overflow-y:auto;border:1px solid var(--border);border-radius:9px">
-      ${snap.positions.map((p,i)=>{
-        const cls=normClass(p.tipo);
-        const isManual=cls==='Inmueble'||cls==='Private Equity'||!p.ticker||p.ticker==='N/A';
-        return `<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid rgba(74,53,32,.3);background:${isManual?'rgba(210,138,63,.04)':'transparent'}">
-          <div style="flex:1;min-width:0">
-            <div style="font-size:12px;font-weight:600;display:flex;align-items:center;gap:5px">
-              ${escH(p.nombre)}
-              ${isManual?'<span style="font-size:9px;color:var(--gold);background:rgba(210,138,63,.15);padding:1px 5px;border-radius:3px">MANUAL</span>':''}
-            </div>
-            <div style="font-size:10px;color:var(--text2)">${escH(p.ticker)} · ${titName(p.titularId)} · ${escH(p.entidad||'—')}</div>
-          </div>
-          <div style="text-align:right;flex-shrink:0">
-            <div style="font-size:10px;color:var(--text2)">Qty: ${p.qty}</div>
-            <input type="number" id="cs-p-${p.id}" value="${p.pA}" step="0.01"
-              style="width:95px;padding:4px 7px;font-size:12px;text-align:right;${isManual?'border-color:var(--gold);':''}}"
-              oninput="csUpdateTotal()"/>
-          </div>
-          <div style="width:85px;text-align:right;flex-shrink:0">
-            <div style="font-size:10px;color:var(--text2)">Valor</div>
-            <div id="cs-val-${p.id}" style="font-size:12px;font-weight:700;color:var(--green)">${fE(p.val)}</div>
-          </div>
-        </div>`;
-      }).join('')}
-    </div>
-  </div>
-  <div style="display:flex;justify-content:space-between;align-items:center;padding:12px;background:rgba(210,138,63,.1);border-radius:9px;margin-bottom:10px;border:1px solid rgba(210,138,63,.25)">
-    <div>
-      <div style="font-size:11px;color:var(--text2)">Patrimonio neto consolidado</div>
-      <div style="font-size:10px;color:var(--text2);margin-top:2px">Cartera + Saldo (${fE(snap.saldo)}) − Deudas (${fE(snap.deudas||0)})</div>
-    </div>
-    <span id="cs-total" style="font-weight:800;font-size:20px;color:var(--gold)">${fE(snap.total)}</span>
-  </div>
-  <div><label class="lbl">Nota del mes (opcional)</label><input id="cs-nota" placeholder="Observaciones, eventos relevantes..."/></div>
-  <input type="hidden" id="cs-snap-saldo" value="${snap.saldo}"/>
-  <input type="hidden" id="cs-snap-deudas" value="${snap.deudas||0}"/>`;
-  openModal('📅 Consolidación Mensual',body,'saveConsolidation()','💾 Guardar consolidación',true);
+// ─── MONTHLY CONSOLIDATION SYSTEM ────────────────────────────────────────────
+// patrimonioReal stores: { year: { month: { total, saldo, deudas, positions:[{id,nombre,ticker,tipo,entidad,qty,pA,val}], nota } } }
+
+function calcPatrimonioNeto(u){
+  const invs=u.inv||[];
+  const loans=u.loans||[];
+  const totA=invs.filter(i=>i.abierta!==false).reduce((s,i)=>s+i.qty*(i.pA||0),0);
+  const totD=loans.reduce((s,l)=>s+(l.pendiente||0),0);
+  return {totA,totD,saldo:u.saldo||0,total:totA-totD+(u.saldo||0)};
 }
 
-// Refresh prices inside the consolidation modal
-async function csRefreshPrices(){
+function buildConsolidation(u){
+  // Build a snapshot from current portfolio state
+  const invs=u.inv||[];
+  const loans=u.loans||[];
+  const {totA,totD,saldo,total}=calcPatrimonioNeto(u);
+  return {
+    total,saldo,deudas:totD,
+    positions:invs.filter(i=>i.abierta!==false).map(i=>({
+      id:i.id,nombre:i.nombre,ticker:i.ticker,tipo:i.tipo,
+      entidad:i.entidad||'',titularId:i.titularId,
+      qty:i.qty,pA:i.pA||0,val:i.qty*(i.pA||0)
+    })),
+    nota:'',ts:Date.now()
+  };
+}
+
+// Fetch live prices for ALL open positions and update them
+async function refreshAllPrices(){
   const u=S.user;
   const invs=(u.inv||[]).filter(i=>i.abierta!==false);
   const cotizados=invs.filter(i=>i.ticker&&i.ticker!=='N/A'&&normClass(i.tipo)!=='Inmueble'&&normClass(i.tipo)!=='Private Equity');
-  const btn=document.getElementById('cs-refresh-btn');
-  if(btn){btn.innerHTML='⏳ Actualizando...';btn.disabled=true;}
-  let updated=0;
+  const noCotizados=invs.filter(i=>!i.ticker||i.ticker==='N/A'||normClass(i.tipo)==='Inmueble'||normClass(i.tipo)==='Private Equity');
+
+  if(!invs.length){ntf('No hay posiciones abiertas');return;}
+
+  const btn=document.getElementById('refresh-prices-btn');
+  if(btn){btn.innerHTML='<span id="rprog">⏳ 0/'+cotizados.length+'</span>';btn.disabled=true;}
+
+  const u2=JSON.parse(JSON.stringify(u));
+  let updated=0,failed=0;
+  const failedList=[];
+
+  // Fetch in batches of 4 in parallel
   const chunks=[];
   for(let i=0;i<cotizados.length;i+=4) chunks.push(cotizados.slice(i,i+4));
+
   for(const chunk of chunks){
     const results=await Promise.allSettled(chunk.map(inv=>fetchLivePrice(inv.ticker)));
-    results.forEach((res,ii)=>{
-      const inv=chunk[ii];
+    results.forEach((res,i)=>{
+      const inv=chunk[i];
+      const prog=document.getElementById('rprog');
+      if(prog) prog.textContent=`⏳ ${updated+failed+1}/${cotizados.length}`;
       if(res.status==='fulfilled'&&res.value?.price>0){
-        const el=document.getElementById(`cs-p-${inv.id}`);
-        if(el){el.value=Math.round(res.value.price*100)/100;el.style.borderColor='var(--green)';}
+        const idx=u2.inv.findIndex(x=>x.id===inv.id);
+        if(idx>=0){
+          u2.inv[idx].pA=Math.round(res.value.price*100)/100;
+          u2.inv[idx].pAFecha=new Date().toISOString().slice(0,10);
+          u2.inv[idx].pACurrency=res.value.currency||'';
+        }
         updated++;
+      } else {
+        failed++;
+        failedList.push(inv);
       }
     });
   }
-  csUpdateTotal();
-  if(btn){btn.innerHTML=`✓ ${updated} precios actualizados`;btn.style.color='var(--green)';}
-}
 
-function csUpdateTotal(){
-  const u=S.user;
-  const invs=(u.inv||[]).filter(i=>i.abierta!==false);
-  let cartera=0;
-  invs.forEach(inv=>{
-    const el=document.getElementById(`cs-p-${inv.id}`);
-    const pA=el?+el.value:inv.pA||0;
-    const val=inv.qty*pA;
-    cartera+=val;
-    const velEl=document.getElementById(`cs-val-${inv.id}`);
-    if(velEl) velEl.textContent=fE(val);
-  });
-  const saldo=+document.getElementById('cs-snap-saldo')?.value||(u.saldo||0);
-  const deudas=+document.getElementById('cs-snap-deudas')?.value||((u.loans||[]).reduce((s,l)=>s+(l.pendiente||0),0));
-  const total=cartera+saldo-deudas;
-  const el=document.getElementById('cs-total');
-  if(el) el.textContent=fE(total);
-}
-
-function saveConsolidation(){
-  const y=+document.getElementById('cs-y')?.value;
-  const mo=+document.getElementById('cs-m')?.value;
-  const nota=document.getElementById('cs-nota')?.value||'';
-  if(!y&&y!==0){ntf('Selecciona el período');return;}
-  const u2=JSON.parse(JSON.stringify(S.user));
-  const invs=(u2.inv||[]).filter(i=>i.abierta!==false);
-
-  // Build position snapshot with edited prices
-  const positions=invs.map(inv=>{
-    const el=document.getElementById(`cs-p-${inv.id}`);
-    const pA=el?Math.round(+el.value*100)/100:inv.pA||0;
-    // Also update the live price in the user's inv array
-    const idx=u2.inv.findIndex(x=>x.id===inv.id);
-    if(idx>=0) u2.inv[idx].pA=pA;
-    return {id:inv.id,nombre:inv.nombre,ticker:inv.ticker,tipo:inv.tipo,
-      entidad:inv.entidad||'',titularId:inv.titularId,qty:inv.qty,pA,val:inv.qty*pA};
-  });
-
-  const cartera=positions.reduce((s,p)=>s+p.val,0);
-  const deudas=(u2.loans||[]).reduce((s,l)=>s+(l.pendiente||0),0);
-  const saldo=u2.saldo||0;
-  const total=cartera+saldo-deudas;
-
-  if(!u2.patrimonioReal) u2.patrimonioReal={};
-  if(!u2.patrimonioReal[y]) u2.patrimonioReal[y]={};
-  u2.patrimonioReal[y][mo]={total,saldo,deudas,positions,nota,ts:Date.now()};
-
-  persist(u2);closeModal();set({user:u2});
-  ntf(`Consolidación ${MN[mo]} ${y} guardada — Patrimonio: ${fE(total)}`);
-}
-
-function openSnapDetail(y,mo){
-  const snap=(S.user.patrimonioReal||{})[y]?.[mo];
-  if(!snap){ntf('Sin datos para este período');return;}
-  const tits=S.user.titulares||[];
-  function titName(id){const t=tits.find(x=>x.id===id);return t?t.nombre:id||'';}
-  const hasPositions=snap.positions&&snap.positions.length>0;
-  const isLegacy=typeof snap==='number'; // old format
-
-  if(isLegacy){
-    // Old format: just a number
-    openModal(`📋 ${MN[mo]} ${y}`,`
-    <div style="text-align:center;padding:20px">
-      <div style="font-size:13px;color:var(--text2);margin-bottom:8px">Patrimonio registrado (formato anterior)</div>
-      <div style="font-size:32px;font-weight:800;color:var(--gold)">${fE(snap)}</div>
-      <div style="font-size:12px;color:var(--text2);margin-top:8px">Sin desglose de activos disponible</div>
-    </div>`,`quickSnapEdit(${y},${mo},${snap})`,'Editar valor',true);
-    return;
-  }
-
-  const body=`
-  <div style="font-size:11px;color:var(--text2);margin-bottom:12px">📅 ${MN[mo]} ${y} · Consolidado: ${snap.ts?new Date(snap.ts).toLocaleDateString('es-ES'):''}</div>
-  <div class="g3" style="margin-bottom:14px">
-    <div style="background:var(--bg3);border-radius:8px;padding:10px;text-align:center">
-      <div style="font-size:10px;color:var(--text2)">Cartera</div>
-      <div style="font-size:15px;font-weight:700;color:var(--green)">${fE(snap.positions?snap.positions.reduce((s,p)=>s+p.val,0):0)}</div>
-    </div>
-    <div style="background:var(--bg3);border-radius:8px;padding:10px;text-align:center">
-      <div style="font-size:10px;color:var(--text2)">Saldo</div>
-      <div style="font-size:15px;font-weight:700;color:var(--blue)">${fE(snap.saldo||0)}</div>
-    </div>
-    <div style="background:var(--bg3);border-radius:8px;padding:10px;text-align:center">
-      <div style="font-size:10px;color:var(--text2)">Patrimonio neto</div>
-      <div style="font-size:15px;font-weight:700;color:var(--gold)">${fE(snap.total||0)}</div>
-    </div>
-  </div>
-  ${snap.nota?`<div style="background:var(--bg3);border-radius:8px;padding:9px;font-size:12px;margin-bottom:12px;color:var(--text2)">📝 ${escH(snap.nota)}</div>`:''}
-  ${hasPositions?`<div style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:8px;text-transform:uppercase;letter-spacing:.4px">Posiciones consolidadas</div>
-  <div class="ov"><table>
-    <thead><tr><th>Activo</th><th>Tipo</th><th>Entidad</th><th>Titular</th><th>Qty</th><th>Precio cierre</th><th>Valor</th><th>✏️</th></tr></thead>
-    <tbody>
-      ${snap.positions.map(p=>`<tr>
-        <td><div style="font-weight:600;font-size:12px">${escH(p.nombre)}</div><div style="font-size:10px;color:var(--text2)">${escH(p.ticker)}</div></td>
-        <td style="font-size:11px"><span style="color:${ASSET_CLASS_COLORS[normClass(p.tipo)]||'#888'}">${normClass(p.tipo)}</span></td>
-        <td style="font-size:11px;color:var(--text2)">${escH(p.entidad||'—')}</td>
-        <td style="font-size:11px">${titName(p.titularId)}</td>
-        <td style="font-size:12px">${p.qty}</td>
-        <td style="font-weight:600">${f2(p.pA)} €</td>
-        <td style="font-weight:700;color:var(--green)">${fE(p.val)}</td>
-        <td><button class="bo" onclick="editSnapPosition(${y},${mo},'${p.id}')" style="padding:2px 6px;font-size:11px">✏️</button></td>
-      </tr>`).join('')}
-    </tbody>
-  </table></div>`:'<div style="color:var(--text2);font-size:12px">Sin desglose de posiciones.</div>'}`;
-  openModal(`📋 Detalle consolidación — ${MN[mo]} ${y}`,body,null,'Cerrar',true);
-}
-
-function quickSnapEdit(y,mo,currentVal){
-  const body=`
-  <div style="margin-bottom:10px">
-    <label class="lbl">Valor patrimonio real (€)</label>
-    <input id="sn-val" type="number" value="${currentVal}"/>
-  </div>
-  <input type="hidden" id="sn-y" value="${y}"/><input type="hidden" id="sn-m" value="${mo}"/>`;
-  openModal(`Editar — ${MN[mo]} ${y}`,body,'saveSimpleSnap()','Guardar');
-}
-function saveSimpleSnap(){
-  const y=+document.getElementById('sn-y')?.value;
-  const mo=+document.getElementById('sn-m')?.value;
-  const val=+document.getElementById('sn-val')?.value;
-  if(!val){ntf('Introduce un valor');return;}
-  const u2=JSON.parse(JSON.stringify(S.user));
-  if(!u2.patrimonioReal) u2.patrimonioReal={};
-  if(!u2.patrimonioReal[y]) u2.patrimonioReal[y]={};
-  // Keep as number for backwards compat
-  u2.patrimonioReal[y][mo]=val;
-  persist(u2);closeModal();set({user:u2});ntf('Valor actualizado');
-}
-
-function editSnapPosition(y,mo,posId){
-  const snap=(S.user.patrimonioReal||{})[y]?.[mo];
-  if(!snap||!snap.positions) return;
-  const pos=snap.positions.find(p=>String(p.id)===String(posId));
-  if(!pos) return;
-  const body=`
-  <div style="margin-bottom:8px"><div style="font-weight:700">${escH(pos.nombre)}</div><div style="font-size:12px;color:var(--text2)">${escH(pos.ticker)} · Qty: ${pos.qty}</div></div>
-  <div class="g2" style="margin-bottom:10px">
-    <div><label class="lbl">Precio a cierre de mes (€)</label><input id="ep-precio" type="number" step="0.01" value="${pos.pA}"/></div>
-    <div><label class="lbl">Valor total</label><div id="ep-val" style="padding:9px 11px;background:var(--bg3);border-radius:8px;font-weight:700;font-size:14px">${fE(pos.val)}</div></div>
-  </div>`;
-  openModal(`✏️ Editar precio — ${escH(pos.nombre)}`,body,`saveSnapPosition(${y},${mo},'${posId}')`, 'Guardar');
-  setTimeout(()=>{
-    const el=document.getElementById('ep-precio');
-    if(el) el.oninput=()=>{const v=document.getElementById('ep-val');if(v)v.textContent=fE(pos.qty*(+el.value||0));};
-  },50);
-}
-function saveSnapPosition(y,mo,posId){
-  const precio=+document.getElementById('ep-precio')?.value||0;
-  const u2=JSON.parse(JSON.stringify(S.user));
-  const snap=u2.patrimonioReal?.[y]?.[mo];
-  if(!snap||!snap.positions) return;
-  const idx=snap.positions.findIndex(p=>String(p.id)===String(posId));
-  if(idx>=0){
-    snap.positions[idx].pA=precio;
-    snap.positions[idx].val=snap.positions[idx].qty*precio;
-    // Recalculate total
-    snap.total=snap.positions.reduce((s,p)=>s+p.val,0)+(snap.saldo||0)-(snap.deudas||0);
-  }
-  persist(u2);closeModal();set({user:u2});ntf('Precio actualizado');
-}
-
-function openEditSnap(){ openConsolidateMes(); }
-
-function delConsolidation(y,mo){
-  if(!confirm(`¿Eliminar la consolidación de ${MN[mo]} ${y}?`)) return;
-  const u2=JSON.parse(JSON.stringify(S.user));
-  if(u2.patrimonioReal?.[y]?.[mo]!==undefined){
-    delete u2.patrimonioReal[y][mo];
-    if(Object.keys(u2.patrimonioReal[y]).length===0) delete u2.patrimonioReal[y];
-  }
-  persist(u2);set({user:u2});ntf('Consolidación eliminada');
-}
-
-function saveSnap(){
-  const y=+document.getElementById('sn-y')?.value;
-  const mo=+document.getElementById('sn-m')?.value;
-  const val=+document.getElementById('sn-val')?.value;
-  if(!val){ntf('Introduce un valor');return;}
-  const u2=JSON.parse(JSON.stringify(S.user));
-  if(!u2.patrimonioReal) u2.patrimonioReal={};
-  if(!u2.patrimonioReal[y]) u2.patrimonioReal[y]={};
-  u2.patrimonioReal[y][mo]=val;
-  persist(u2);closeModal();set({user:u2});ntf('Patrimonio actualizado');
-}
-
-function quickSnap(y,mo,theo){
-  openConsolidateMes();
-}
-
-// ─── PROFILE TEST ─────────────────────────────────────────────────────────────
-function openProfileTest(){
-  const existing=S.user.profileAnswers||{};
-  const body=`<div id="ptest-body">${renderProfileQ(0,existing)}</div>`;
-  openModal('🎯 Test Perfil Inversor',body,null,'');
-  window._pAnswers={...existing};
-}
-function renderProfileQ(step,answers){
-  const q=PROFILE_QUESTIONS[step];
-  const isLast=step===PROFILE_QUESTIONS.length-1;
-  return `<div>
-    <div style="font-size:12px;color:var(--text2);margin-bottom:4px">Pregunta ${step+1} de ${PROFILE_QUESTIONS.length}</div>
-    <div style="font-weight:700;font-size:14px;margin-bottom:14px">${q.q}</div>
-    ${q.opts.map((o,i)=>`<div onclick="selectPQ(${step},${i})"
-      style="padding:10px 14px;background:${answers[q.id]===i?'rgba(108,99,255,.2)':'var(--bg3)'};border:1px solid ${answers[q.id]===i?'var(--accent)':'var(--border)'};border-radius:9px;cursor:pointer;margin-bottom:7px;font-size:13px;transition:all .2s"
-      onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='${answers[q.id]===i?'var(--accent)':'var(--border)'}'">
-      ${o.label}
-    </div>`).join('')}
-    <div style="display:flex;justify-content:space-between;margin-top:16px">
-      ${step>0?`<button class="bo" onclick="navPQ(${step-1})" style="padding:7px 13px">← Anterior</button>`:'<div></div>'}
-      ${isLast?`<button class="ba" onclick="finishProfile()" style="padding:7px 16px">Ver mi perfil →</button>`:`<button class="ba" onclick="navPQ(${step+1})" style="padding:7px 13px">Siguiente →</button>`}
-    </div>
-  </div>`;
-}
-function selectPQ(step,optIdx){
-  const q=PROFILE_QUESTIONS[step];
-  window._pAnswers[q.id]=optIdx;
-  document.getElementById('ptest-body').innerHTML=renderProfileQ(step,window._pAnswers);
-}
-function navPQ(step){
-  document.getElementById('ptest-body').innerHTML=renderProfileQ(step,window._pAnswers||{});
-}
-function finishProfile(){
-  const ans=window._pAnswers||{};
-  let score=0;
-  PROFILE_QUESTIONS.forEach(q=>{
-    const idx=ans[q.id];
-    if(idx!=null)score+=q.opts[idx].pts;
-  });
-  const prof=scoreToProfile(score);
-  document.getElementById('ptest-body').innerHTML=`
-    <div style="text-align:center;padding:20px 0">
-      <div style="font-size:14px;color:var(--text2);margin-bottom:8px">Tu puntuación: <b>${score}/60</b></div>
-      <div style="font-size:28px;font-weight:800;color:${prof.color};margin-bottom:6px">${prof.label}</div>
-      <div style="font-size:12px;color:var(--text2);margin-bottom:14px">${prof.desc||''}</div>
-      <div class="g2" style="margin-bottom:16px;text-align:left">
-        <div style="background:var(--bg3);border-radius:10px;padding:12px;text-align:center">
-          <div style="font-size:11px;color:var(--text2)">Renta Variable</div>
-          <div style="font-size:22px;font-weight:700;color:var(--accent)">${prof.rvMin||0}–${prof.rvMax||0}%</div>
-          <div style="font-size:10px;color:var(--text2);margin-top:2px">Rango Renta4</div>
-        </div>
-        <div style="background:var(--bg3);border-radius:10px;padding:12px;text-align:center">
-          <div style="font-size:11px;color:var(--text2)">Renta Fija</div>
-          <div style="font-size:22px;font-weight:700;color:var(--blue)">${prof.rfMid||0}%</div>
-          <div style="font-size:10px;color:var(--text2);margin-top:2px">Peso típico</div>
-        </div>
-        <div style="background:var(--bg3);border-radius:10px;padding:12px;text-align:center">
-          <div style="font-size:11px;color:var(--text2)">Rentabilidad esperada</div>
-          <div style="font-size:22px;font-weight:700;color:${prof.color}">${prof.retExp}%/año</div>
-          <div style="font-size:10px;color:var(--text2);margin-top:2px">Fuente: Renta4</div>
-        </div>
-        <div style="background:var(--bg3);border-radius:10px;padding:12px;text-align:center">
-          <div style="font-size:11px;color:var(--text2)">Desv. estándar (σ)</div>
-          <div style="font-size:22px;font-weight:700;color:var(--purple)">±${prof.std}%</div>
-          <div style="font-size:10px;color:var(--text2);margin-top:2px">Volatilidad anual</div>
-        </div>
-      </div>
-      <div style="font-size:12px;color:var(--text2);margin-bottom:16px;padding:10px;background:var(--bg3);border-radius:9px;text-align:left">
-        Con el perfil <b style="color:${prof.color}">${prof.label}</b> (datos Renta4):<br>
-        · Escenario base: <b>${prof.retExp}%</b>/año<br>
-        · ±1σ (68% prob.): <b>${(prof.retExp-prof.std).toFixed(1)}% a ${(prof.retExp+prof.std).toFixed(1)}%</b><br>
-        · ±2σ (95% prob.): <b>${(prof.retExp-2*prof.std).toFixed(1)}% a ${(prof.retExp+2*prof.std).toFixed(1)}%</b>
-      </div>
-      <button class="ba" onclick="applyProfile('${prof.id}',${score})" style="width:100%;padding:11px;font-size:14px;font-weight:600">Aplicar este perfil</button>
-    </div>`;
-}
-function applyProfile(profId,score){
-  const u2={...S.user,profileId:profId,profileScore:score,profileAnswers:window._pAnswers||S.user.profileAnswers||{}};
-  persist(u2);closeModal();set({user:u2});ntf('✓ Perfil guardado: '+getProfile(profId).label);
-}
-function changeProfile(profId){
-  const u2={...S.user,profileId:profId};
-  persist(u2);set({user:u2});ntf('Perfil: '+getProfile(profId).label);
-}
-
-
-// ─── MERCADOS & WATCHLIST ──────────────────────────────────────────────────────
-const MKT_GROUPS={
-  indices:{ico:'📊',label:'Índices',items:[
-    {sym:'^IBEX',n:'IBEX 35',cat:'ESP'},{sym:'^STOXX50E',n:'Euro Stoxx 50',cat:'EU'},
-    {sym:'^GDAXI',n:'DAX 40',cat:'DE'},{sym:'^FCHI',n:'CAC 40',cat:'FR'},
-    {sym:'^FTSE',n:'FTSE 100',cat:'UK'},{sym:'^GSPC',n:'S&P 500',cat:'US'},
-    {sym:'^IXIC',n:'Nasdaq',cat:'US'},{sym:'^DJI',n:'Dow Jones',cat:'US'},
-    {sym:'^N225',n:'Nikkei 225',cat:'JP'},{sym:'^HSI',n:'Hang Seng',cat:'HK'},
-  ]},
-  divisas:{ico:'💱',label:'Divisas',items:[
-    {sym:'EURUSD=X',n:'EUR/USD',cat:''},{sym:'EURGBP=X',n:'EUR/GBP',cat:''},
-    {sym:'EURJPY=X',n:'EUR/JPY',cat:''},{sym:'EURCHF=X',n:'EUR/CHF',cat:''},
-    {sym:'EURCNY=X',n:'EUR/CNY',cat:''},{sym:'EURCAD=X',n:'EUR/CAD',cat:''},
-    {sym:'BTC-EUR',n:'Bitcoin/EUR',cat:'Cripto'},{sym:'ETH-EUR',n:'Ethereum/EUR',cat:'Cripto'},
-  ]},
-  materias:{ico:'🛢️',label:'Materias Primas',items:[
-    {sym:'GC=F',n:'Oro ($/oz)',cat:''},{sym:'SI=F',n:'Plata ($/oz)',cat:''},
-    {sym:'CL=F',n:'Petróleo WTI',cat:''},{sym:'BZ=F',n:'Petróleo Brent',cat:''},
-    {sym:'NG=F',n:'Gas Natural',cat:''},{sym:'HG=F',n:'Cobre',cat:''},
-  ]},
-  rf:{ico:'📄',label:'Renta Fija',items:[
-    {sym:'^IRX',n:'T-Bill 3M',cat:'US'},{sym:'^FVX',n:'T-Note 5Y',cat:'US'},
-    {sym:'^TNX',n:'T-Note 10Y',cat:'US'},{sym:'^TYX',n:'T-Bond 30Y',cat:'US'},
-    {sym:'ES3Y=X',n:'Bund 3Y',cat:'EU'},{sym:'ES10Y=X',n:'Bund 10Y',cat:'EU'},
-  ]},
-};
-
-// Cache for market prices: {sym: {price, pct, name, ts}}
-let MKT_CACHE={};
-let MKT_LOADING=new Set();
-
-async function mktFetchGroup(group){
-  const items=MKT_GROUPS[group]?.items||[];
-  const toFetch=items.filter(i=>!MKT_CACHE[i.sym]||Date.now()-MKT_CACHE[i.sym].ts>300000);
-  if(!toFetch.length){render();return;}
-  toFetch.forEach(i=>MKT_LOADING.add(i.sym));
-  render();
-  await Promise.allSettled(toFetch.map(item=>mktFetchOne(item.sym,item.n)));
-  render();
-}
-
-async function mktFetchWatchlist(){
-  const wl=getWatchlist();if(!wl.length)return;
-  const toFetch=wl.filter(w=>!MKT_CACHE[w.sym]||Date.now()-MKT_CACHE[w.sym].ts>300000);
-  if(!toFetch.length)return;
-  toFetch.forEach(w=>MKT_LOADING.add(w.sym));render();
-  await Promise.allSettled(toFetch.map(w=>mktFetchOne(w.sym,w.name)));
-  render();
-}
-
-async function mktFetchMembers(idxSym){
-  const members=IDX_MEMBERS[idxSym]||[];
-  const toFetch=members.filter(m=>!MKT_CACHE[m.sym]);
-  if(!toFetch.length){render();return;}
-  toFetch.forEach(m=>MKT_LOADING.add(m.sym));render();
-  await Promise.allSettled(toFetch.map(m=>mktFetchOne(m.sym,m.n)));
-  render();
-}
-
-
-
-// Watchlist stored in user data
-function getWatchlist(){return S.user?.watchlist||[];}
-function addToWatchlist(sym,name){
-  if(getWatchlist().find(w=>w.sym===sym)){ntf('Ya está en la watchlist');return;}
-  const u2={...S.user,watchlist:[...(S.user.watchlist||[]),{sym,name,added:new Date().toISOString().slice(0,10)}]};
-  persist(u2);set({user:u2});ntf(`${sym} añadido a Watchlist`);
-  mktFetchGroup('watchlist');
-}
-function removeFromWatchlist(sym){
-  const u2={...S.user,watchlist:(S.user.watchlist||[]).filter(w=>w.sym!==sym)};
   persist(u2);set({user:u2});
-}
+  if(btn){btn.innerHTML='🔄 Actualizar precios';btn.disabled=false;}
 
+  const ts=new Date().toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'});
+  let msg=`✓ ${updated} precios actualizados a las ${ts}`;
+  if(failed>0) msg+=` · ${failed} sin precio live`;
+  ntf(msg);
 
-// Chart fetch — returns array of {date, close}
-async function fetchChartData(sym, range='1mo', interval='1d'){
-  try{
-    const r=await tryFetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=${interval}&range=${range}`);
-    const result=r?.chart?.result?.[0];
-    if(!result) return null;
-    const ts=result.timestamp||[];
-    const closes=result.indicators?.quote?.[0]?.close||[];
-    return ts.map((t,i)=>({date:new Date(t*1000).toLocaleDateString('es-ES',{month:'short',day:'numeric'}),close:closes[i]})).filter(d=>d.close!=null);
-  }catch(e){return null;}
-}
-
-// Stock chart modal — full page chart with range selector
-let MCH={sym:null,name:'',range:'1mo',data:null,loading:false};
-async function openStockChart(sym,name){
-  MCH={sym,name,range:'1mo',data:null,loading:true};
-  render();
-  const data=await fetchChartData(sym,'1mo','1d');
-  MCH.data=data;MCH.loading=false;
-  render();
-}
-function closeStockChart(){MCH.sym=null;render();}
-async function changeChartRange(range){
-  const intervals={'1d':'5m','5d':'30m','1mo':'1d','3mo':'1d','6mo':'1wk','1y':'1wk','5y':'1mo'};
-  MCH.range=range;MCH.loading=true;MCH.data=null;render();
-  const data=await fetchChartData(MCH.sym,range,intervals[range]||'1d');
-  MCH.data=data;MCH.loading=false;
-  render();
-}
-
-function renderStockChartModal(){
-  const sym=MCH.sym,name=MCH.name;
-  const cached=MKT_CACHE[sym];
-  const data=MCH.data;
-  const ranges=[['1d','1D'],['5d','5D'],['1mo','1M'],['3mo','3M'],['6mo','6M'],['1y','1A'],['5y','5A']];
-  
-  // Build SVG chart from data
-  let chartSVG='<div style="display:flex;align-items:center;justify-content:center;height:200px;color:var(--text2);font-size:13px">⏳ Cargando datos...</div>';
-  if(data&&data.length>1&&!MCH.loading){
-    const W=340,H=170,pad=8,padt=20;
-    const vals=data.map(d=>d.close);
-    const hi=Math.max(...vals),lo=Math.min(...vals);
-    const rng=hi-lo||hi*0.02;
-    const up=vals[vals.length-1]>=vals[0];
-    const col=up?'var(--green)':'var(--red)';
-    const colFill=up?'rgba(76,175,125,0.12)':'rgba(224,82,82,0.12)';
-    const py=v=>padt+((H-padt-pad)*(1-(v-lo)/rng));
-    const px=i=>(W-pad*2)*i/(data.length-1)+pad;
-    const pts=data.map((d,i)=>`${px(i).toFixed(1)},${py(d.close).toFixed(1)}`).join(' ');
-    // Area fill path
-    const areaPath=`M${pad},${H-pad} L${data.map((d,i)=>`${px(i).toFixed(1)},${py(d.close).toFixed(1)}`).join(' L')} L${px(data.length-1).toFixed(1)},${H-pad} Z`;
-    // X axis labels (show ~5)
-    const step=Math.max(1,Math.floor(data.length/4));
-    const xLabels=data.filter((_,i)=>i%step===0||i===data.length-1).map((d,i,arr)=>`<text x="${px(i===0?0:data.length-1-(arr.length-1-i)*step).toFixed(0)}" y="${H}" fill="var(--text2)" font-size="8" text-anchor="middle">${d.date}</text>`).join('');
-    chartSVG=`<svg viewBox="0 0 ${W} ${H+10}" style="width:100%;height:200px;display:block">
-      <path d="${areaPath}" fill="${colFill}"/>
-      <polyline points="${pts}" fill="none" stroke="${col}" stroke-width="1.8" stroke-linejoin="round"/>
-      <text x="${pad}" y="${padt-3}" fill="var(--text2)" font-size="8" font-family="monospace">$${hi.toFixed(2)}</text>
-      <text x="${pad}" y="${H-pad-2}" fill="var(--text2)" font-size="8" font-family="monospace">$${lo.toFixed(2)}</text>
-      ${xLabels}
-    </svg>`;
-  } else if(!MCH.loading){
-    chartSVG='<div style="display:flex;align-items:center;justify-content:center;height:200px;color:var(--text2);font-size:12px">No se pudieron cargar los datos del gráfico.<br>Puede ser por restricciones CORS en el navegador.</div>';
+  // If there are failed or non-quoted assets, offer to edit them manually
+  if(failedList.length>0||noCotizados.length>0){
+    const all=[...failedList,...noCotizados];
+    setTimeout(()=>openManualPriceEdit(all,u2),500);
   }
-  
-  return `<div style="position:fixed;inset:0;background:rgba(0,0,0,.88);z-index:500;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this)closeStockChart()">
-    <div class="card" style="width:100%;max-width:480px;max-height:90vh;overflow-y:auto">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px">
-        <div>
-          <div style="font-size:18px;font-weight:800;color:var(--gold);font-family:monospace">${escH(sym)}</div>
-          <div style="font-size:11px;color:var(--text2)">${escH(name)}</div>
-          ${cached?`<div style="display:flex;align-items:baseline;gap:8px;margin-top:5px">
-            <span style="font-size:22px;font-weight:800;font-family:monospace">${cached.currency==='EUR'?fE(cached.price):cached.price.toFixed(2)+' '+cached.currency}</span>
-            ${cached.pct!=null?`<span style="font-size:13px;font-weight:700;padding:2px 7px;border-radius:6px;background:${cached.pct>=0?'rgba(76,175,125,.15)':'rgba(224,82,82,.15)'};color:${cached.pct>=0?'var(--green)':'var(--red)'};font-family:monospace">${cached.pct>=0?'+':''}${cached.pct.toFixed(2)}%</span>`:''}
-          </div>`:''}
-        </div>
-        <button class="bo" onclick="closeStockChart()" style="padding:6px 10px;font-size:14px">✕</button>
-      </div>
-      <!-- Range buttons -->
-      <div style="display:flex;gap:4px;margin-bottom:10px;flex-wrap:wrap">
-        ${ranges.map(([r,l])=>`<button class="${MCH.range===r?'ba':'bo'}" onclick="changeChartRange('${r}')" style="font-size:11px;padding:4px 9px;min-width:36px">${l}</button>`).join('')}
-      </div>
-      <!-- Chart -->
-      <div style="background:var(--bg3);border-radius:10px;padding:8px;margin-bottom:10px;min-height:200px">${chartSVG}</div>
-      <!-- Actions -->
-      <div style="display:flex;gap:8px">
-        <button class="bs" onclick="addToWatchlist('${sym}','${escH(name)}')" style="flex:1;font-size:12px">⭐ Añadir Watchlist</button>
-        <button class="bo" onclick="closeStockChart()" style="flex:1;font-size:12px">Cerrar</button>
-      </div>
-      <div style="font-size:9px;color:var(--text2);margin-top:8px;text-align:center">Datos con retraso 15-20 min · Yahoo Finance · No es asesoramiento</div>
+}
+
+function openManualPriceEdit(invList, u){
+  if(!invList.length) return;
+  const body=`
+  <div style="font-size:12px;color:var(--text2);margin-bottom:12px">
+    ${invList.length} activo${invList.length>1?'s':''} sin precio automático (inmuebles, private equity, activos no cotizados o tickers no reconocidos). Introduce sus valores manualmente:
+  </div>
+  ${invList.map(inv=>`<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
+    <div style="flex:1">
+      <div style="font-size:12px;font-weight:600">${escH(inv.nombre)}</div>
+      <div style="font-size:11px;color:var(--text2)">${escH(inv.ticker||'Sin ticker')} · ${escH(inv.entidad||'—')} · Qty: ${inv.qty}</div>
     </div>
-  </div>`;
-}
-
-function tabMercados(){
-  const group=S.mGroup||'indices';
-  const items=MKT_GROUPS[group]?.items||[];
-  const wl=getWatchlist();
-  
-  // Auto-fetch on first view
-  if(!items.every(i=>MKT_CACHE[i.sym])) {
-    setTimeout(()=>mktFetchGroup(group),100);
-  }
-  
-  const fmtPrice=(sym,cat)=>{
-    const d=MKT_CACHE[sym];
-    if(MKT_LOADING.has(sym)) return `<span style="color:var(--text2);font-size:11px">⏳</span>`;
-    if(!d) return `<span style="color:var(--text2);font-size:11px">—</span>`;
-    const isPct=(group==='rf');
-    const priceStr=isPct?d.price.toFixed(2)+'%':(d.currency==='EUR'?fE(d.price):d.price.toLocaleString('es-ES',{minimumFractionDigits:2,maximumFractionDigits:2})+' '+d.currency);
-    const pctStr=d.pct!=null?`<span style="color:${d.pct>=0?'var(--green)':'var(--red)'};font-size:11px;margin-left:4px">${d.pct>=0?'+':''}${d.pct.toFixed(2)}%</span>`:'';
-    return `<span style="font-weight:700;font-family:monospace">${priceStr}</span>${pctStr}`;
-  };
-  
-  return `<div class="sec">${MCH.sym?renderStockChartModal():''}
-  <div class="sech">
-    <div class="sect">📡 Mercados</div>
-    <button class="bo" onclick="mktFetchGroup('${group}');mktFetchWatchlist()" style="font-size:12px;padding:6px 10px">🔄 Actualizar</button>
-  </div>
-  
-  <!-- Group tabs -->
-  <div style="display:flex;gap:6px;margin-bottom:14px;overflow-x:auto;padding-bottom:2px;scrollbar-width:none">
-    ${Object.entries(MKT_GROUPS).map(([k,g])=>`
-      <button class="${group===k?'ba':'bo'}" onclick="set({mGroup:'${k}'})" style="flex-shrink:0;padding:7px 12px;font-size:12px">
-        ${g.ico} ${g.label}
-      </button>`).join('')}
-    <button class="${group==='watchlist'?'ba':'bo'}" onclick="set({mGroup:'watchlist'})" style="flex-shrink:0;padding:7px 12px;font-size:12px">
-      ⭐ Watchlist ${wl.length>0?`<span style="background:rgba(255,255,255,.2);border-radius:10px;padding:1px 5px;font-size:10px;margin-left:3px">${wl.length}</span>`:''}
-    </button>
-  </div>
-  
-  <!-- Market data cards -->
-  ${group!=='watchlist'?`
-  <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--r);overflow:hidden;margin-bottom:14px">
-    ${items.map((item,i)=>`
-      <div onclick="openStockChart('${item.sym}','${item.n}')" style="display:flex;justify-content:space-between;align-items:center;padding:11px 14px;border-bottom:${i<items.length-1?'1px solid rgba(74,53,32,.3)':'none'};cursor:pointer;transition:background .15s" onmouseover="this.style.background='rgba(210,138,63,.04)'" onmouseout="this.style.background=''">
-        <div>
-          <div style="font-weight:600;font-size:13px">${escH(item.n)}</div>
-          ${item.cat?`<div style="font-size:10px;color:var(--text2)">${item.cat}</div>`:''}
-        </div>
-        <div style="text-align:right">
-          ${fmtPrice(item.sym,item.cat)}
-          <div style="font-size:9px;color:var(--text2);margin-top:2px">📊 ver gráfico</div>
-        </div>
-      </div>`).join('')}
-  </div>`:``}
-  
-  <!-- Watchlist -->
-  ${group==='watchlist'?`
-  <div style="margin-bottom:12px">
-    <div style="display:flex;gap:8px;margin-bottom:12px">
-      <input id="wl-input" placeholder="Ticker (AAPL, MSFT, ITX.MC...)" style="flex:1"/>
-      <button class="ba" onclick="addWlItem()" style="white-space:nowrap;padding:8px 12px">+ Añadir</button>
+    <div style="flex-shrink:0;text-align:right">
+      <label style="font-size:10px;color:var(--text2);display:block">Precio actual (€)</label>
+      <input id="mp-${inv.id}" type="number" value="${inv.pA||0}" step="0.01" style="width:100px;text-align:right"/>
     </div>
-    ${wl.length===0?`<div style="text-align:center;color:var(--text2);padding:32px;font-size:13px">
-      <div style="font-size:32px;margin-bottom:8px">⭐</div>
-      Añade tickers para seguir su precio.<br>
-      <span style="font-size:11px">Ej: AAPL, NVDA, ITX.MC, BTC-EUR</span>
-    </div>`:`
-    <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--r);overflow:hidden">
-      ${wl.map((w,i)=>`
-        <div onclick="openStockChart('${w.sym}','${escH(w.name)}')" style="display:flex;justify-content:space-between;align-items:center;padding:11px 14px;border-bottom:${i<wl.length-1?'1px solid rgba(74,53,32,.3)':'none'};cursor:pointer;transition:background .15s" onmouseover="this.style.background='rgba(210,138,63,.04)'" onmouseout="this.style.background=''">
-          <div>
-            <div style="font-weight:700;font-size:13px;color:var(--gold)">${escH(w.sym)}</div>
-            <div style="font-size:11px;color:var(--text2)">${escH(w.name)} · añadido ${w.added||''}</div>
-          </div>
-          <div style="display:flex;align-items:center;gap:10px">
-            <div style="text-align:right">${fmtPrice(w.sym,'')}</div>
-            <button class="bd" onclick="event.stopPropagation();removeFromWatchlist('${w.sym}')" style="padding:3px 7px;font-size:11px">✕</button>
-          </div>
-        </div>`).join('')}
-    </div>`}
-  </div>`:``}
-  
-  <div style="font-size:10px;color:var(--text2);text-align:center;padding:8px 0">⏱ Datos con retraso 15-20 min · Yahoo Finance · Toca cualquier activo para ver el gráfico</div>
-  </div>`;
-}
-
-function addWlItem(){
-  const inp=document.getElementById('wl-input');
-  if(!inp||!inp.value.trim())return;
-  const sym=inp.value.trim().toUpperCase();
-  addToWatchlist(sym,sym);
-  inp.value='';
-}
-
-// ─── HERRAMIENTAS ──────────────────────────────────────────────────────────────
-function tabHerramientas(){
-  const htab=S.htab||'radar';
-  return `<div class="sec">${MCH.sym?renderStockChartModal():''}
-  <div class="sech"><div class="sect">🛠️ Herramientas</div></div>
-  
-  <!-- Sub-tabs -->
-  <div style="display:flex;background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:3px;margin-bottom:14px;gap:2px;overflow-x:auto;scrollbar-width:none">
-    ${[['mercados','📡 Mercados'],['watchlist','⭐ Watchlist'],['screener','🔍 Screener'],['radar','🎯 Radar'],['calculadoras','🔢 Calc']].map(([id,l])=>`
-      <button class="${htab===id?'ba':'bo'}" onclick="set({htab:'${id}'})" style="flex:1;min-width:0;padding:8px 4px;font-size:11px;font-weight:700;border:none;border-radius:8px;white-space:nowrap">${l}</button>`).join('')}
-  </div>
-  
-  ${htab==='radar'?tabRadarInner():''}
-  ${htab==='calculadoras'?tabCalcs():''}
-  ${htab==='playbook'?tabPlaybook():''}
-  </div>`;
-}
-
-function tabCalcs(){
-  setTimeout(()=>{calcIC();calcR72();calcTIR();},80);
-  return `<div>
-  <!-- Interés compuesto -->
-  <div class="card" style="margin-bottom:12px">
-    <div style="font-weight:700;font-size:14px;margin-bottom:12px">📈 Calculadora de Interés Compuesto</div>
-    <div class="g2" style="margin-bottom:10px">
-      <div><label class="lbl">Capital inicial (€)</label><input type="number" id="ci-cap" value="10000" oninput="calcIC()"/></div>
-      <div><label class="lbl">Aportación mensual (€)</label><input type="number" id="ci-aport" value="500" oninput="calcIC()"/></div>
-      <div><label class="lbl">Rentabilidad anual (%)</label><input type="number" id="ci-rent" value="7" step="0.1" oninput="calcIC()"/></div>
-      <div><label class="lbl">Años</label><input type="number" id="ci-años" value="20" oninput="calcIC()"/></div>
+    <div style="flex-shrink:0;width:80px;text-align:right">
+      <div style="font-size:10px;color:var(--text2)">Total</div>
+      <div id="mp-val-${inv.id}" style="font-size:12px;font-weight:700">${fE(inv.qty*(inv.pA||0))}</div>
     </div>
-    <div id="ci-result" style="background:var(--bg3);border-radius:10px;padding:12px"></div>
-  </div>
-  <!-- Regla 72 -->
-  <div class="card" style="margin-bottom:12px">
-    <div style="font-weight:700;font-size:14px;margin-bottom:10px">⚡ Regla del 72</div>
-    <div class="g2" style="margin-bottom:10px">
-      <div><label class="lbl">Rentabilidad anual (%)</label><input type="number" id="r72-rent" value="7" step="0.1" oninput="calcR72()"/></div>
-      <div><label class="lbl">Años para doblar</label><input type="number" id="r72-años" value="" placeholder="auto" oninput="calcR72r()"/></div>
-    </div>
-    <div id="r72-result" style="background:var(--bg3);border-radius:10px;padding:12px;font-size:13px;color:var(--text2)"></div>
-  </div>
-  <!-- TIR manual -->
-  <div class="card">
-    <div style="font-weight:700;font-size:14px;margin-bottom:10px">📊 Cálculo de Rentabilidad</div>
-    <div class="g2" style="margin-bottom:10px">
-      <div><label class="lbl">Precio de compra (€)</label><input type="number" id="tir-compra" value="1000" oninput="calcTIR()"/></div>
-      <div><label class="lbl">Precio de venta (€)</label><input type="number" id="tir-venta" value="1350" oninput="calcTIR()"/></div>
-      <div><label class="lbl">Fecha de compra</label><input type="date" id="tir-fcompra" value="${new Date(Date.now()-365*2*86400000).toISOString().slice(0,10)}" oninput="calcTIR()"/></div>
-      <div><label class="lbl">Fecha de venta</label><input type="date" id="tir-fventa" value="${new Date().toISOString().slice(0,10)}" oninput="calcTIR()"/></div>
-    </div>
-    <div id="tir-result" style="background:var(--bg3);border-radius:10px;padding:12px"></div>
-  </div>
-  </div>`;
-}
+  </div>`).join('')}`;
 
-function calcIC(){
-  const cap=+document.getElementById('ci-cap')?.value||0;
-  const aport=+document.getElementById('ci-aport')?.value||0;
-  const rent=+document.getElementById('ci-rent')?.value||0;
-  const años=+document.getElementById('ci-años')?.value||0;
-  if(!años){return;}
-  const rm=Math.pow(1+rent/100,1/12)-1;
-  const n=años*12;
-  const fv=cap*Math.pow(1+rm,n)+(rm>0?aport*(Math.pow(1+rm,n)-1)/rm:aport*n);
-  const aportado=cap+aport*n;
-  const ganancia=fv-aportado;
-  const el=document.getElementById('ci-result');
-  if(el) el.innerHTML=`<div class="g3">
-    <div><div style="font-size:10px;color:var(--text2);margin-bottom:3px">CAPITAL FINAL</div><div style="font-size:18px;font-weight:800;color:var(--green)">${fE(Math.round(fv))}</div></div>
-    <div><div style="font-size:10px;color:var(--text2);margin-bottom:3px">APORTADO</div><div style="font-size:16px;font-weight:700;color:var(--blue)">${fE(Math.round(aportado))}</div></div>
-    <div><div style="font-size:10px;color:var(--text2);margin-bottom:3px">INTERESES</div><div style="font-size:16px;font-weight:700;color:var(--gold)">${fE(Math.round(ganancia))}</div></div>
-  </div>
-  <div style="margin-top:8px;font-size:11px;color:var(--text2)">Multiplicador: ×${(fv/Math.max(1,cap)).toFixed(1)} · Intereses = ${Math.round(ganancia/Math.max(1,aportado)*100)}% del capital aportado</div>`;
-}
-
-function calcR72(){
-  const rent=+document.getElementById('r72-rent')?.value||0;
-  const años=rent>0?(72/rent):null;
-  const el=document.getElementById('r72-result');
-  if(el&&años) el.innerHTML=`Con una rentabilidad del <b style="color:var(--green)">${rent}%/año</b>, tu dinero se dobla en aproximadamente <b style="color:var(--gold)">${años.toFixed(1)} años</b>.${años<=10?` A este ritmo, en 30 años ×${Math.pow(2,30/años).toFixed(0)}.`:''}`;
-}
-function calcR72r(){
-  const años=+document.getElementById('r72-años')?.value||0;
-  const rent=años>0?(72/años):null;
-  const el=document.getElementById('r72-result');
-  if(el&&rent) el.innerHTML=`Para doblar en <b style="color:var(--gold)">${años} años</b> necesitas una rentabilidad de aproximadamente <b style="color:var(--green)">${rent.toFixed(1)}%/año</b>.`;
-}
-function calcTIR(){
-  const compra=+document.getElementById('tir-compra')?.value||0;
-  const venta=+document.getElementById('tir-venta')?.value||0;
-  const fc=document.getElementById('tir-fcompra')?.value;
-  const fv=document.getElementById('tir-fventa')?.value;
-  if(!compra||!venta||!fc||!fv)return;
-  const dias=Math.max(1,Math.round((new Date(fv)-new Date(fc))/86400000));
-  const ganTotal=(venta-compra)/compra*100;
-  const tir=(Math.pow(1+(venta-compra)/compra,365/dias)-1)*100;
-  const el=document.getElementById('tir-result');
-  if(el) el.innerHTML=`<div class="g3">
-    <div><div style="font-size:10px;color:var(--text2);margin-bottom:3px">GANANCIA TOTAL</div><div style="font-size:17px;font-weight:800;color:${ganTotal>=0?'var(--green)':'var(--red)'}">${ganTotal>=0?'+':''}${ganTotal.toFixed(2)}%</div></div>
-    <div><div style="font-size:10px;color:var(--text2);margin-bottom:3px">TIR ANUALIZADA</div><div style="font-size:17px;font-weight:800;color:${tir>=0?'var(--green)':'var(--red)'}">${tir>=0?'+':''}${tir.toFixed(2)}%/año</div></div>
-    <div><div style="font-size:10px;color:var(--text2);margin-bottom:3px">DÍAS INVERSIÓN</div><div style="font-size:17px;font-weight:700;color:var(--text)">${dias}d · ${(dias/365).toFixed(1)}a</div></div>
-  </div>`;
-}
-
-function tabMercadosInner(){
-  const group=S.mGroup||'indices';
-  const items=MKT_GROUPS[group]?.items||[];
-  const techMode=S.mTechMode||false;
-  // Auto-fetch on first render
-  if(items.some(i=>!MKT_CACHE[i.sym])) setTimeout(()=>mktFetchGroup(group),60);
-
-  const fmtPrice=(sym)=>{
-    const d=MKT_CACHE[sym];
-    if(MKT_LOADING.has(sym)) return '<span style="color:var(--text2);font-size:11px">⏳</span>';
-    if(!d) return '<span style="color:var(--text2);font-size:11px">—</span>';
-    const pr=d.price>9999?d.price.toLocaleString('es-ES',{maximumFractionDigits:0}):
-              d.price>99?d.price.toFixed(2):d.price.toFixed(3);
-    const pStr=d.pct!=null
-      ?` <span style="font-size:11px;color:${d.pct>=0?'var(--green)':'var(--red)'}">${d.pct>=0?'+':''}${d.pct.toFixed(2)}%</span>`
-      :'';
-    return `<span style="font-weight:700;font-family:monospace">${pr}</span>${pStr}`;
-  };
-
-  const fmtTech=(sym)=>{
-    const ts=calcTechSignal(sym,'d1');
-    if(!ts) return '<span style="color:var(--text2);font-size:11px">—</span>';
-    return `<span style="font-size:11px;font-weight:700;color:${ts.color}">${ts.label}</span>`;
-  };
-
-  return `<div>
-  <!-- Group pills + refresh + tech toggle -->
-  <div style="display:flex;gap:5px;margin-bottom:10px;overflow-x:auto;scrollbar-width:none;align-items:center">
-    <div style="display:flex;gap:4px;flex:1;overflow-x:auto;scrollbar-width:none">
-      ${Object.entries(MKT_GROUPS).map(([k,g])=>`<button class="${group===k?'ba':'bo'}" onclick="set({mGroup:'${k}',mTechMode:false})" style="flex-shrink:0;padding:5px 9px;font-size:11px">${g.ico} ${g.label}</button>`).join('')}
-    </div>
-    <button class="${techMode?'ba':'bo'}" onclick="set({mTechMode:${!techMode}})" style="flex-shrink:0;padding:5px 10px;font-size:11px;font-weight:700" title="Vista técnica">🔬${techMode?' ON':''}</button>
-    <button class="bo" onclick="mktFetchGroup('${group}')" style="flex-shrink:0;padding:5px 9px;font-size:12px">🔄</button>
-  </div>
-
-  <!-- Activos list — click name → chart, ⭐ → watchlist -->
-  <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--r);overflow:hidden;margin-bottom:10px">
-    ${items.map((item,i)=>{
-      const hasMembers=!!IDX_MEMBERS[item.sym];
-      const isInWL=(S.user?.watchlists||[{items:S.user?.watchlist||[]}]).some(wl=>(wl.items||[]).some(w=>w.sym===item.sym));
-      return `<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border-bottom:${i<items.length-1?'1px solid rgba(74,53,32,.25)':'none'}">
-        <!-- Name: clickable → chart -->
-        <div onclick="openStockChart('${item.sym}','${item.n}')" style="cursor:pointer;flex:1;min-width:0;padding-right:8px" onmouseover="this.parentElement.style.background='rgba(210,138,63,.04)'" onmouseout="this.parentElement.style.background=''">
-          <div style="font-weight:600;font-size:13px">${item.n}${item.cat?` <span style="font-size:10px;color:var(--text2)">${item.cat}</span>`:''}</div>
-          ${hasMembers?`<div style="font-size:9px;color:var(--text2)">📋 ver miembros al abrir</div>`:''}
-        </div>
-        <!-- Price / tech -->
-        <div style="text-align:right;flex-shrink:0;margin-right:8px">
-          ${techMode?fmtTech(item.sym):fmtPrice(item.sym)}
-        </div>
-        <!-- Star -->
-        <button onclick="event.stopPropagation();addToWatchlistModal('${item.sym}','${item.n}')" style="background:${isInWL?'rgba(210,138,63,.2)':'var(--bg3)'};border:1px solid ${isInWL?'var(--gold)':'var(--border)'};border-radius:6px;padding:4px 7px;font-size:13px;cursor:pointer;flex-shrink:0" title="Añadir a Watchlist">${isInWL?'⭐':'☆'}</button>
-      </div>`;
-    }).join('')}
-  </div>
-  <div style="font-size:9px;color:var(--text2);text-align:center;padding:4px 0">
-    ⏱ Datos con retraso 15-20 min · Toca el nombre para ver gráfico · 🔬 activa vista técnica arriba
-  </div>
-  </div>`;
-}
-
-// ─── WATCHLIST INNER ───────────────────────────────────────────────────────────
-function tabWatchlistInner(){
-  const wls=getWatchlists();
-  const activeWL=getActiveWL();
-  const items=activeWL.items||[];
-  if(items.length&&!items.every(i=>MKT_CACHE[i.sym])) setTimeout(()=>mktFetchWatchlist(),80);
-
-  const fmtWL=(sym)=>{
-    const d=MKT_CACHE[sym];
-    if(MKT_LOADING.has(sym)) return '⏳';
-    if(!d) return '—';
-    const pr=d.price>999?d.price.toLocaleString('es-ES',{maximumFractionDigits:0}):d.price.toFixed(2);
-    const pStr=d.pct!=null?`<span style="color:${d.pct>=0?'var(--green)':'var(--red)'};font-family:monospace"> ${d.pct>=0?'+':''}${d.pct.toFixed(2)}%</span>`:'';
-    return `<span style="font-weight:700;font-family:monospace">${pr}</span>${pStr}`;
-  };
-
-  return `<div>
-  <!-- WL selector + new -->
-  <div style="display:flex;gap:6px;margin-bottom:10px;overflow-x:auto;scrollbar-width:none;padding-bottom:2px">
-    ${wls.map(w=>`<button class="${w.id===activeWL.id?'ba':'bo'}" onclick="set({mWLid:'${w.id}'})" style="flex-shrink:0;padding:6px 11px;font-size:11px;font-weight:700">${w.name} <span style="opacity:.7;font-size:10px">${(w.items||[]).length}</span></button>`).join('')}
-    <button class="bo" onclick="openCreateWL()" style="flex-shrink:0;padding:6px 10px;font-size:11px">+ Nueva</button>
-  </div>
-  <!-- Add ticker -->
-  <div style="display:flex;gap:7px;margin-bottom:12px">
-    <input id="wl-input" placeholder="Ticker (AAPL, ITX.MC, BTC-EUR...)" style="flex:1;font-size:13px"/>
-    <button class="ba" onclick="addWlItem()" style="white-space:nowrap;padding:8px 12px;font-size:12px">+ Añadir</button>
-    <button class="bo" onclick="mktFetchWatchlist();render()" style="padding:8px 10px;font-size:12px">🔄</button>
-  </div>
-  ${items.length===0?`<div style="text-align:center;color:var(--text2);padding:32px;font-size:13px">
-    <div style="font-size:32px;margin-bottom:8px">⭐</div>
-    Esta watchlist está vacía.<br>
-    <span style="font-size:11px">Añade tickers o pulsa ⭐ en cualquier activo</span>
-  </div>`:`
-  <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--r);overflow:hidden">
-    ${items.map((w,i)=>`
-      <div onclick="openStockChart('${w.sym}','${escH(w.name)}')" style="display:flex;justify-content:space-between;align-items:center;padding:10px 13px;border-bottom:${i<items.length-1?'1px solid rgba(74,53,32,.28)':'none'};cursor:pointer;transition:background .12s" onmouseover="this.style.background='rgba(210,138,63,.05)'" onmouseout="this.style.background=''">
-        <div>
-          <div style="font-weight:700;font-size:13px;color:var(--gold)">${escH(w.sym)}</div>
-          <div style="font-size:10px;color:var(--text2)">${escH(w.name)}</div>
-        </div>
-        <div style="display:flex;align-items:center;gap:10px">
-          <div style="text-align:right">${fmtWL(w.sym)}</div>
-          <button class="bd" onclick="event.stopPropagation();removeFromWatchlist('${w.sym}')" style="padding:3px 7px;font-size:11px">✕</button>
-        </div>
-      </div>`).join('')}
-  </div>`}
-  </div>`;
-}
-
-function openCreateWL(){
-  const body=`<div>
-    <label class="lbl">Nombre de la nueva watchlist</label>
-    <input id="new-wl-n" placeholder="Ej: Tecnología, Ibex, Radar..." style="margin-bottom:12px"/>
-  </div>`;
-  openModal('Nueva Watchlist',body,'createWL()','Crear');
-}
-function createWL(){
-  const n=document.getElementById('new-wl-n')?.value.trim();
-  if(!n){ntf('Introduce un nombre');return;}
-  const u2=JSON.parse(JSON.stringify(S.user));
-  if(!u2.watchlists) u2.watchlists=[{id:'wl1',name:'Principal',items:u2.watchlist||[]}];
-  const newId='wl'+Date.now();
-  u2.watchlists.push({id:newId,name:n,items:[]});
-  persist(u2);closeModal();set({user:u2,mWLid:newId});ntf(`Watchlist "${n}" creada`);
-}
-
-
-
-
-const SCREENER_DB=[
-  // ── US Tech ──────────────────────────────────────────────────────────────────
-  {n:'Apple',          t:'AAPL',  geo:'US', cap:3400,capL:'$3.4T', roic:42, mop:30.7, per:32,  eveb:24,  crec:7,   sector:'Tech',     d:0.3, w:1.2, m:-4.1, y:14.2},
-  {n:'Microsoft',      t:'MSFT',  geo:'US', cap:3100,capL:'$3.1T', roic:38, mop:42.1, per:34,  eveb:26,  crec:16,  sector:'Tech',     d:0.5, w:0.8, m:-3.2, y:8.4},
-  {n:'NVIDIA',         t:'NVDA',  geo:'US', cap:2100,capL:'$2.1T', roic:55, mop:55.3, per:40,  eveb:30,  crec:122, sector:'Tech',     d:-1.2,w:-3.4,m:-18.6,y:42.1},
-  {n:'Alphabet',       t:'GOOGL', geo:'US', cap:2000,capL:'$2.0T', roic:28, mop:31.6, per:22,  eveb:14,  crec:11,  sector:'Tech',     d:0.4, w:1.1, m:-5.8, y:3.2},
-  {n:'Amazon',         t:'AMZN',  geo:'US', cap:1900,capL:'$1.9T', roic:18, mop:9.3,  per:38,  eveb:16,  crec:11,  sector:'Consumer', d:0.2, w:0.9, m:-8.2, y:6.1},
-  {n:'Meta Platforms', t:'META',  geo:'US', cap:1500,capL:'$1.5T', roic:34, mop:38.1, per:26,  eveb:17,  crec:22,  sector:'Tech',     d:0.8, w:2.1, m:-2.4, y:22.3},
-  {n:'Tesla',          t:'TSLA',  geo:'US', cap:800, capL:'$800B', roic:9,  mop:9.2,  per:85,  eveb:42,  crec:2,   sector:'EV',       d:-2.4,w:-4.8,m:-32.1,y:-38.4},
-  {n:'Broadcom',       t:'AVGO',  geo:'US', cap:780, capL:'$780B', roic:21, mop:58.3, per:29,  eveb:22,  crec:44,  sector:'Tech',     d:0.6, w:1.4, m:-6.4, y:18.2},
-  {n:'JPMorgan Chase', t:'JPM',   geo:'US', cap:720, capL:'$720B', roic:16, mop:38.2, per:12,  eveb:null,crec:12,  sector:'Banca',    d:0.3, w:0.8, m:-2.1, y:24.6},
-  {n:'Visa',           t:'V',     geo:'US', cap:590, capL:'$590B', roic:44, mop:67.1, per:28,  eveb:21,  crec:10,  sector:'Finance',  d:0.1, w:0.6, m:-1.8, y:12.4},
-  {n:'Johnson & Johnson',t:'JNJ', geo:'US', cap:380, capL:'$380B', roic:24, mop:22.8, per:15,  eveb:12,  crec:4,   sector:'Salud',    d:-0.2,w:0.4, m:1.2,  y:3.8},
-  {n:'UnitedHealth',   t:'UNH',   geo:'US', cap:460, capL:'$460B', roic:18, mop:8.4,  per:22,  eveb:15,  crec:8,   sector:'Salud',    d:-3.8,w:-8.2,m:-22.4,y:-18.6},
-  {n:'Berkshire Hath.',t:'BRK-B', geo:'US', cap:1100,capL:'$1.1T', roic:10, mop:null, per:14,  eveb:null,crec:5,   sector:'Finance',  d:0.4, w:1.8, m:2.4,  y:18.4},
-  {n:'ExxonMobil',     t:'XOM',   geo:'US', cap:480, capL:'$480B', roic:18, mop:16.2, per:13,  eveb:8,   crec:-4,  sector:'Energía',  d:0.8, w:1.2, m:4.8,  y:6.2},
-  {n:'Procter & Gamble',t:'PG',   geo:'US', cap:370, capL:'$370B', roic:28, mop:19.8, per:26,  eveb:18,  crec:3,   sector:'Consumo',  d:0.1, w:0.3, m:-0.8, y:8.4},
-  // ── US Mid-Small ─────────────────────────────────────────────────────────────
-  {n:'Palantir',       t:'PLTR',  geo:'US', cap:290, capL:'$290B', roic:8,  mop:14.2, per:480, eveb:null,crec:29,  sector:'Tech',     d:2.4, w:4.8, m:-18.4,y:62.4},
-  {n:'CrowdStrike',    t:'CRWD',  geo:'US', cap:82,  capL:'$82B',  roic:12, mop:2.4,  per:null,eveb:null,crec:25,  sector:'Tech',     d:1.2, w:2.4, m:-12.4,y:24.2},
-  {n:'Cloudflare',     t:'NET',   geo:'US', cap:32,  capL:'$32B',  roic:-4, mop:-2.8, per:null,eveb:null,crec:28,  sector:'Tech',     d:0.8, w:1.6, m:-8.2, y:2.4},
-  {n:'EverQuote',      t:'EVER',  geo:'US', cap:1,   capL:'$980M', roic:8,  mop:4.2,  per:45,  eveb:22,  crec:41,  sector:'InsurTech',d:1.8, w:4.6, m:12.3, y:41.0},
-  // ── US Quantum/Photonics ─────────────────────────────────────────────────────
-  {n:'IonQ',           t:'IONQ',  geo:'US', cap:10,  capL:'$9.8B', roic:-28,mop:-62,  per:null,eveb:null,crec:95,  sector:'Quantum',  d:20.1,w:18.3,m:-12.4,y:55.6},
-  {n:'D-Wave Quantum', t:'QBTS',  geo:'US', cap:3,   capL:'$3.2B', roic:-35,mop:-80,  per:null,eveb:null,crec:60,  sector:'Quantum',  d:14.4,w:12.8,m:-8.6, y:458.0},
-  {n:'Rigetti Computing',t:'RGTI',geo:'US', cap:2,   capL:'$1.9B', roic:-42,mop:-110, per:null,eveb:null,crec:40,  sector:'Quantum',  d:4.98,w:9.2, m:-15.3,y:545.0},
-  {n:'POET Technologies',t:'POET',geo:'US', cap:1,   capL:'$920M', roic:-45,mop:-88,  per:null,eveb:null,crec:80,  sector:'Photonics',d:5.9, w:8.4, m:22.4, y:94.4},
-  // ── EU Blue Chip ─────────────────────────────────────────────────────────────
-  {n:'ASML Holding',   t:'ASML',  geo:'EU', cap:280, capL:'$280B', roic:45, mop:32.4, per:34,  eveb:22,  crec:14,  sector:'Semis',    d:0.6, w:1.2, m:-8.4, y:8.4},
-  {n:'SAP SE',         t:'SAP',   geo:'EU', cap:240, capL:'$240B', roic:22, mop:22.8, per:40,  eveb:24,  crec:8,   sector:'Software', d:0.4, w:0.8, m:-2.4, y:18.6},
-  {n:'LVMH',           t:'MC.PA', geo:'EU', cap:285, capL:'$285B', roic:19, mop:26.1, per:18,  eveb:12,  crec:5,   sector:'Luxury',   d:-0.8,w:-1.2,m:-4.8, y:-12.4},
-  {n:'Novo Nordisk',   t:'NVO',   geo:'EU', cap:420, capL:'$420B', roic:42, mop:34.8, per:22,  eveb:16,  crec:22,  sector:'Salud',    d:-0.4,w:-0.8,m:-6.4, y:-28.4},
-  {n:'Hermès',         t:'RMS.PA',geo:'EU', cap:220, capL:'$220B', roic:28, mop:42.1, per:52,  eveb:34,  crec:12,  sector:'Luxury',   d:0.2, w:0.6, m:-2.4, y:4.8},
-  {n:'Siemens',        t:'SIE.DE',geo:'EU', cap:130, capL:'$130B', roic:14, mop:10.8, per:18,  eveb:12,  crec:8,   sector:'Industrial',d:0.4,w:0.8,m:-2.1, y:12.4},
-  {n:'Schneider Elec.',t:'SU.PA', geo:'EU', cap:115, capL:'$115B', roic:16, mop:16.4, per:24,  eveb:16,  crec:10,  sector:'Industrial',d:0.6,w:1.2,m:-1.8, y:18.4},
-  {n:'AstraZeneca',    t:'AZN',   geo:'EU', cap:240, capL:'$240B', roic:14, mop:20.4, per:18,  eveb:12,  crec:18,  sector:'Salud',    d:0.8, w:1.4, m:2.4,  y:6.4},
-  // ── España ───────────────────────────────────────────────────────────────────
-  {n:'Inditex',        t:'ITX.MC',geo:'ES', cap:135, capL:'$135B', roic:35, mop:22.4, per:24,  eveb:16,  crec:10,  sector:'Retail',   d:0.4, w:0.8, m:-1.2, y:8.4},
-  {n:'Santander',      t:'SAN.MC',geo:'ES', cap:80,  capL:'$80B',  roic:12, mop:34.0, per:7,   eveb:null,crec:8,   sector:'Banca',    d:0.6, w:1.4, m:2.8,  y:32.4},
-  {n:'BBVA',           t:'BBVA.MC',geo:'ES',cap:75,  capL:'$75B',  roic:13, mop:36.2, per:8,   eveb:null,crec:9,   sector:'Banca',    d:0.8, w:2.1, m:4.2,  y:44.8},
-  {n:'Iberdrola',      t:'IBE.MC', geo:'ES',cap:85,  capL:'$85B',  roic:8,  mop:18.6, per:20,  eveb:14,  crec:7,   sector:'Utilities',d:0.2, w:0.6, m:1.8,  y:12.4},
-  {n:'Ferrovial',      t:'FER.MC', geo:'ES',cap:42,  capL:'$42B',  roic:10, mop:12.4, per:28,  eveb:18,  crec:6,   sector:'Infra',    d:0.4, w:0.8, m:-0.8, y:8.4},
-  {n:'CaixaBank',      t:'CABK.MC',geo:'ES',cap:48,  capL:'$48B',  roic:11, mop:30.2, per:9,   eveb:null,crec:7,   sector:'Banca',    d:0.6, w:1.2, m:3.4,  y:28.4},
-  {n:'Amadeus IT',     t:'AMS.MC', geo:'ES',cap:28,  capL:'$28B',  roic:28, mop:22.8, per:26,  eveb:18,  crec:12,  sector:'Tech',     d:0.2, w:0.4, m:-2.4, y:4.8},
-  {n:'Repsol',         t:'REP.MC', geo:'ES',cap:14,  capL:'$14B',  roic:12, mop:8.4,  per:6,   eveb:4,   crec:-2,  sector:'Energía',  d:1.2, w:2.4, m:4.8,  y:-4.8},
-  {n:'Telefónica',     t:'TEF.MC', geo:'ES',cap:22,  capL:'$22B',  roic:6,  mop:14.2, per:12,  eveb:8,   crec:2,   sector:'Telecom',  d:0.4, w:0.8, m:1.2,  y:4.8},
-  // ── EV / Auto ────────────────────────────────────────────────────────────────
-  {n:'Lucid Group',    t:'LCID',   geo:'US',cap:3,   capL:'$2.9B', roic:-55,mop:-180, per:null,eveb:null,crec:-30, sector:'EV',       d:12.0,w:8.4, m:-18.6,y:-68.0},
-  {n:'Rivian',         t:'RIVN',   geo:'US',cap:20,  capL:'$19.8B',roic:-28,mop:-80,  per:null,eveb:null,crec:8,   sector:'EV',       d:1.7, w:1.6, m:-8.2, y:-18.0},
-  {n:'ChargePoint',    t:'CHPT',   geo:'US',cap:0.15,capL:'$153M', roic:-22,mop:-42,  per:null,eveb:null,crec:-2,  sector:'EV',       d:9.0, w:6.5, m:-18.4,y:-64.0},
-  // ── Fondos / ETFs referencia ─────────────────────────────────────────────────
-  {n:'Vanguard S&P 500',t:'VOO',   geo:'US',cap:null,capL:'ETF',   roic:null,mop:null,per:null,eveb:null,crec:null,sector:'ETF',      d:0.3, w:0.8, m:-4.2, y:8.4},
-  {n:'iShares MSCI World',t:'IWDA',geo:'EU',cap:null,capL:'ETF',   roic:null,mop:null,per:null,eveb:null,crec:null,sector:'ETF',      d:0.2, w:0.6, m:-3.8, y:6.2},
-  {n:'Invesco QQQ',    t:'QQQ',    geo:'US',cap:null,capL:'ETF',   roic:null,mop:null,per:null,eveb:null,crec:null,sector:'ETF',      d:0.4, w:1.1, m:-6.8, y:4.8},
-];
-
-let SCR={geo:'',sector:'',sort:'cap',q:'',techMin:'',perfPeriod:'m',perfMin:'',roicMin:'',perMax:'',crecMin:''};
-
-function tabScreenerInner(){
-  const sectors=[...new Set(SCREENER_DB.map(s=>s.sector))].sort();
-  const geos=[...new Set(SCREENER_DB.map(s=>s.geo))].sort();
-
-  let list=SCREENER_DB.filter(s=>{
-    if(SCR.geo&&s.geo!==SCR.geo) return false;
-    if(SCR.sector&&s.sector!==SCR.sector) return false;
-    if(SCR.q){const ql=SCR.q.toLowerCase();if(!s.n.toLowerCase().includes(ql)&&!s.t.toLowerCase().includes(ql))return false;}
-    // Fundamentals filters
-    if(SCR.roicMin!==''&&(s.roic==null||s.roic<+SCR.roicMin)) return false;
-    if(SCR.perMax!==''&&s.per!=null&&s.per>+SCR.perMax) return false;
-    if(SCR.crecMin!==''&&(s.crec==null||s.crec<+SCR.crecMin)) return false;
-    // Performance filter
-    const pv={d:s.d,w:s.w,m:s.m,y:s.y}[SCR.perfPeriod]??null;
-    if(SCR.perfMin!==''&&(pv==null||pv<+SCR.perfMin)) return false;
-    // Tech signal filter
-    if(SCR.techMin){
-      const ts=calcTechSignal(s.t,'d1');
-      const sigMap={STRONG_BUY:2,BUY:1,NEUTRAL:0,SELL:-1,STRONG_SELL:-2};
-      const minMap={'STRONG_BUY':2,'BUY':1,'NEUTRAL':0,'SELL':-1};
-      if(!ts||sigMap[ts.signal]<(minMap[SCR.techMin]??-99)) return false;
-    }
-    return true;
-  });
-
-  if(SCR.sort==='cap')  list.sort((a,b)=>(b.cap||0)-(a.cap||0));
-  else if(SCR.sort==='roic') list.sort((a,b)=>(b.roic??-999)-(a.roic??-999));
-  else if(SCR.sort==='crec') list.sort((a,b)=>(b.crec??-999)-(a.crec??-999));
-  else if(SCR.sort==='per')  list.sort((a,b)=>(a.per??9999)-(b.per??9999));
-  else if(SCR.sort==='perf'){
-    list.sort((a,b)=>{
-      const av={d:a.d,w:a.w,m:a.m,y:a.y}[SCR.perfPeriod]??-999;
-      const bv={d:b.d,w:b.w,m:b.m,y:b.y}[SCR.perfPeriod]??-999;
-      return bv-av;
+  // Wire up live preview
+  setTimeout(()=>{
+    invList.forEach(inv=>{
+      const el=document.getElementById(`mp-${inv.id}`);
+      if(el) el.oninput=()=>{
+        const v=document.getElementById(`mp-val-${inv.id}`);
+        if(v) v.textContent=fE(inv.qty*(+el.value||0));
+      };
     });
-  }
+  },60);
 
-  const colFn=(v,good,bad)=>{
-    if(v==null) return 'var(--text2)';
-    return v>=good?'var(--green)':v<=bad?'var(--red)':'var(--gold)';
-  };
-  const pctCell=(v)=>v==null?'<span style="color:var(--text2)">—</span>':`<span style="color:${v>=0?'var(--green)':'var(--red)'}; font-family:monospace">${v>=0?'+':''}${v.toFixed(1)}%</span>`;
-
-  return `<div>
-  <!-- Search row -->
-  <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap">
-    <input id="scr-q" placeholder="Empresa o ticker..." value="${SCR.q}" oninput="SCR.q=this.value;render()" style="flex:1;min-width:100px;font-size:12px"/>
-    <select onchange="SCR.geo=this.value;render()" style="font-size:11px;width:auto">
-      <option value="">🌍 Todos</option>
-      ${geos.map(g=>`<option value="${g}" ${SCR.geo===g?'selected':''}>${g}</option>`).join('')}
-    </select>
-    <select onchange="SCR.sector=this.value;render()" style="font-size:11px;width:auto">
-      <option value="">📂 Sector</option>
-      ${sectors.map(s=>`<option value="${s}" ${SCR.sector===s?'selected':''}>${s}</option>`).join('')}
-    </select>
-  </div>
-  <!-- Filter row -->
-  <div style="background:var(--bg3);border:1px solid var(--border);border-radius:9px;padding:10px 12px;margin-bottom:10px">
-    <div style="font-size:10px;color:var(--gold);font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">Filtros</div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
-      <!-- Fundamentales -->
-      <div style="flex:1;min-width:80px">
-        <div style="font-size:9px;color:var(--text2);margin-bottom:3px">ROIC% mín</div>
-        <input type="number" placeholder="Ej: 10" value="${SCR.roicMin}" oninput="SCR.roicMin=this.value;render()" style="font-size:11px;padding:5px 8px"/>
-      </div>
-      <div style="flex:1;min-width:80px">
-        <div style="font-size:9px;color:var(--text2);margin-bottom:3px">PER máx</div>
-        <input type="number" placeholder="Ej: 30" value="${SCR.perMax}" oninput="SCR.perMax=this.value;render()" style="font-size:11px;padding:5px 8px"/>
-      </div>
-      <div style="flex:1;min-width:80px">
-        <div style="font-size:9px;color:var(--text2);margin-bottom:3px">Crec.% mín</div>
-        <input type="number" placeholder="Ej: 10" value="${SCR.crecMin}" oninput="SCR.crecMin=this.value;render()" style="font-size:11px;padding:5px 8px"/>
-      </div>
-      <!-- Técnico -->
-      <div style="flex:1;min-width:100px">
-        <div style="font-size:9px;color:var(--text2);margin-bottom:3px">Señal técnica mín</div>
-        <select onchange="SCR.techMin=this.value;render()" style="font-size:11px;padding:5px 6px">
-          <option value="">Cualquiera</option>
-          <option value="NEUTRAL"   ${SCR.techMin==='NEUTRAL'?'selected':''}>Neutral+</option>
-          <option value="BUY"       ${SCR.techMin==='BUY'?'selected':''}>Compra+</option>
-          <option value="STRONG_BUY"${SCR.techMin==='STRONG_BUY'?'selected':''}>Compra Fuerte</option>
-        </select>
-      </div>
-      <!-- Performance -->
-      <div style="flex:1;min-width:80px">
-        <div style="font-size:9px;color:var(--text2);margin-bottom:3px">Performance</div>
-        <select onchange="SCR.perfPeriod=this.value;render()" style="font-size:11px;padding:5px 6px">
-          <option value="d"  ${SCR.perfPeriod==='d'?'selected':''}>1D</option>
-          <option value="w"  ${SCR.perfPeriod==='w'?'selected':''}>1S</option>
-          <option value="m"  ${SCR.perfPeriod==='m'?'selected':''}>1M</option>
-          <option value="y"  ${SCR.perfPeriod==='y'?'selected':''}>1A</option>
-        </select>
-      </div>
-      <div style="flex:1;min-width:70px">
-        <div style="font-size:9px;color:var(--text2);margin-bottom:3px">% mín</div>
-        <input type="number" placeholder="Ej: 5" value="${SCR.perfMin}" oninput="SCR.perfMin=this.value;render()" style="font-size:11px;padding:5px 8px"/>
-      </div>
-      <!-- Sort + Reset -->
-      <div style="flex:1;min-width:90px">
-        <div style="font-size:9px;color:var(--text2);margin-bottom:3px">Ordenar por</div>
-        <select onchange="SCR.sort=this.value;render()" style="font-size:11px;padding:5px 6px">
-          <option value="cap"  ${SCR.sort==='cap'?'selected':''}>Cap. Bursátil</option>
-          <option value="roic" ${SCR.sort==='roic'?'selected':''}>ROIC%</option>
-          <option value="crec" ${SCR.sort==='crec'?'selected':''}>Crecimiento</option>
-          <option value="per"  ${SCR.sort==='per'?'selected':''}>PER (menor)</option>
-          <option value="perf" ${SCR.sort==='perf'?'selected':''}>Performance</option>
-        </select>
-      </div>
-      <button class="bo" onclick="SCR={geo:'',sector:'',sort:'cap',q:'',techMin:'',perfPeriod:'m',perfMin:'',roicMin:'',perMax:'',crecMin:''};render()" style="padding:5px 8px;font-size:11px;align-self:flex-end">✕ Reset</button>
-    </div>
-  </div>
-  <!-- Results count -->
-  <div style="font-size:10px;color:var(--text2);margin-bottom:6px">${list.length} empresa${list.length!==1?'s':''} encontrada${list.length!==1?'s':''}</div>
-  <!-- Table -->
-  <div class="ov" style="margin-bottom:8px">
-    <table style="min-width:640px">
-      <thead><tr>
-        <th style="min-width:120px">Empresa</th>
-        <th>Cap</th>
-        <th title="Return on Invested Capital">ROIC%</th>
-        <th title="Margen Operativo">MOp%</th>
-        <th title="Price/Earnings">PER</th>
-        <th title="Crecimiento Ventas">Crec%</th>
-        <th>1D</th><th>1M</th><th>1A</th>
-        <th>Señal 1D</th>
-        <th></th>
-      </tr></thead>
-      <tbody>
-        ${list.map(s=>{
-          const ts=calcTechSignal(s.t,'d1');
-          const isInWL=(S.user?.watchlists||[{items:S.user?.watchlist||[]}]).some(wl=>(wl.items||[]).some(w=>w.sym===s.t));
-          return `<tr onclick="openStockChart('${s.t}','${s.n}')" style="cursor:pointer" onmouseover="this.style.background='rgba(210,138,63,.04)'" onmouseout="this.style.background=''">
-            <td>
-              <div style="font-weight:600;font-size:12px">${s.n}</div>
-              <div style="font-size:10px;color:var(--accent);font-family:monospace">${s.t} <span style="color:var(--text2)">${s.geo}</span></div>
-            </td>
-            <td style="font-size:11px;color:var(--text2);white-space:nowrap">${s.capL}</td>
-            <td style="font-weight:700;font-family:monospace;font-size:11px;color:${colFn(s.roic,15,0)}">${s.roic!=null?s.roic+'%':'—'}</td>
-            <td style="font-family:monospace;font-size:11px;color:${colFn(s.mop,15,0)}">${s.mop!=null?s.mop.toFixed(1)+'%':'—'}</td>
-            <td style="font-family:monospace;font-size:11px;color:${s.per==null?'var(--text2)':s.per<20?'var(--green)':s.per>50?'var(--red)':'var(--gold)'}">${s.per??'—'}</td>
-            <td style="font-weight:700;font-family:monospace;font-size:11px;color:${colFn(s.crec,20,0)}">${s.crec!=null?(s.crec>0?'+':'')+s.crec+'%':'—'}</td>
-            <td>${pctCell(s.d)}</td>
-            <td>${pctCell(s.m)}</td>
-            <td>${pctCell(s.y)}</td>
-            <td><span style="font-size:10px;font-weight:700;color:${ts?.color||'var(--text2)'};white-space:nowrap">${ts?.label||'—'}</span></td>
-            <td onclick="event.stopPropagation()"><button onclick="addToWatchlistModal('${s.t}','${s.n}')" style="background:${isInWL?'rgba(210,138,63,.2)':'var(--bg3)'};border:1px solid ${isInWL?'var(--gold)':'var(--border)'};border-radius:5px;padding:3px 6px;font-size:12px;cursor:pointer">${isInWL?'⭐':'☆'}</button></td>
-          </tr>`;
-        }).join('')}
-      </tbody>
-    </table>
-  </div>
-  <div style="font-size:9px;color:var(--text2)">Toca fila para gráfico · Fundamentales orientativos · Señal técnica algorítmica · No es asesoramiento · Renta 4</div>
-  </div>`;
+  openModal('✏️ Valoración manual de activos',body,`saveManualPrices(${JSON.stringify(invList.map(i=>i.id))})` ,'Guardar precios',true);
 }
 
-
-
-function calcIC(){
-  const cap=+document.getElementById('ci-cap')?.value||0;
-  const aport=+document.getElementById('ci-aport')?.value||0;
-  const rent=+document.getElementById('ci-rent')?.value||0;
-  const años=+document.getElementById('ci-años')?.value||0;
-  if(!años){return;}
-  const rm=Math.pow(1+rent/100,1/12)-1;
-  const n=años*12;
-  const fv=cap*Math.pow(1+rm,n)+(rm>0?aport*(Math.pow(1+rm,n)-1)/rm:aport*n);
-  const aportado=cap+aport*n;
-  const ganancia=fv-aportado;
-  const el=document.getElementById('ci-result');
-  if(el) el.innerHTML=`<div class="g3">
-    <div><div style="font-size:10px;color:var(--text2);margin-bottom:3px">CAPITAL FINAL</div><div style="font-size:18px;font-weight:800;color:var(--green)">${fE(Math.round(fv))}</div></div>
-    <div><div style="font-size:10px;color:var(--text2);margin-bottom:3px">APORTADO</div><div style="font-size:16px;font-weight:700;color:var(--blue)">${fE(Math.round(aportado))}</div></div>
-    <div><div style="font-size:10px;color:var(--text2);margin-bottom:3px">INTERESES</div><div style="font-size:16px;font-weight:700;color:var(--gold)">${fE(Math.round(ganancia))}</div></div>
-  </div>
-  <div style="margin-top:8px;font-size:11px;color:var(--text2)">Multiplicador: ×${(fv/Math.max(1,cap)).toFixed(1)} · Intereses = ${Math.round(ganancia/Math.max(1,aportado)*100)}% del capital aportado</div>`;
+function saveManualPrices(ids){
+  const u2=JSON.parse(JSON.stringify(S.user));
+  ids.forEach(id=>{
+    const el=document.getElementById(`mp-${id}`);
+    if(el){
+      const idx=u2.inv.findIndex(x=>x.id===id);
+      if(idx>=0){
+        u2.inv[idx].pA=Math.round(+el.value*100)/100;
+        u2.inv[idx].pAFecha=new Date().toISOString().slice(0,10);
+      }
+    }
+  });
+  persist(u2);closeModal();set({user:u2});ntf('Precios manuales guardados');
 }
 
-function calcR72(){
-  const rent=+document.getElementById('r72-rent')?.value||0;
-  const años=rent>0?(72/rent):null;
-  const el=document.getElementById('r72-result');
-  if(el&&años) el.innerHTML=`Con una rentabilidad del <b style="color:var(--green)">${rent}%/año</b>, tu dinero se dobla en aproximadamente <b style="color:var(--gold)">${años.toFixed(1)} años</b>.${años<=10?` A este ritmo, en 30 años ×${Math.pow(2,30/años).toFixed(0)}.`:''}`;
-}
-function calcR72r(){
-  const años=+document.getElementById('r72-años')?.value||0;
-  const rent=años>0?(72/años):null;
-  const el=document.getElementById('r72-result');
-  if(el&&rent) el.innerHTML=`Para doblar en <b style="color:var(--gold)">${años} años</b> necesitas una rentabilidad de aproximadamente <b style="color:var(--green)">${rent.toFixed(1)}%/año</b>.`;
-}
-function calcTIR(){
-  const compra=+document.getElementById('tir-compra')?.value||0;
-  const venta=+document.getElementById('tir-venta')?.value||0;
-  const fc=document.getElementById('tir-fcompra')?.value;
-  const fv=document.getElementById('tir-fventa')?.value;
-  if(!compra||!venta||!fc||!fv)return;
-  const dias=Math.max(1,Math.round((new Date(fv)-new Date(fc))/86400000));
-  const ganTotal=(venta-compra)/compra*100;
-  const tir=(Math.pow(1+(venta-compra)/compra,365/dias)-1)*100;
-  const el=document.getElementById('tir-result');
-  if(el) el.innerHTML=`<div class="g3">
-    <div><div style="font-size:10px;color:var(--text2);margin-bottom:3px">GANANCIA TOTAL</div><div style="font-size:17px;font-weight:800;color:${ganTotal>=0?'var(--green)':'var(--red)'}">${ganTotal>=0?'+':''}${ganTotal.toFixed(2)}%</div></div>
-    <div><div style="font-size:10px;color:var(--text2);margin-bottom:3px">TIR ANUALIZADA</div><div style="font-size:17px;font-weight:800;color:${tir>=0?'var(--green)':'var(--red)'}">${tir>=0?'+':''}${tir.toFixed(2)}%/año</div></div>
-    <div><div style="font-size:10px;color:var(--text2);margin-bottom:3px">DÍAS INVERSIÓN</div><div style="font-size:17px;font-weight:700;color:var(--text)">${dias}d · ${(dias/365).toFixed(1)}a</div></div>
-  </div>`;
-}
-
+// Open consolidation modal: auto-build from current state, allow editing
 function tabPlaybook(){
   return `<div>
   <div class="card" style="margin-bottom:10px;border-left:3px solid var(--accent)">
@@ -5571,13 +5128,6 @@ function removeFromWatchlist(sym){
   persist(u2);set({user:u2});
 }
 
-function addWlItem(){
-  const inp=document.getElementById('wl-input');
-  if(!inp||!inp.value.trim())return;
-  const sym=inp.value.trim().toUpperCase();
-  addToWatchlistModal(sym,sym);
-  inp.value='';
-}
 
 // ─── HERRAMIENTAS — unified tab ────────────────────────────────────────────────
 
